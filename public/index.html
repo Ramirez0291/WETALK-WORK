@@ -1,0 +1,230 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>WeTalk 研讨室</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <div class="app">
+    <aside class="sidebar" id="sidebar">
+      <div class="brand">
+        <span class="brand-mark">◐</span>
+        <div>
+          <div class="brand-name">WeTalk</div>
+          <div class="brand-sub">人与 AI 的研讨室</div>
+        </div>
+      </div>
+      <button class="btn btn-primary btn-block" id="newThreadBtn">＋ 新议题</button>
+      <button class="btn btn-block" id="memoryBtn">📓 记忆本</button>
+      <nav class="thread-list" id="threadList"></nav>
+      <div class="sidebar-foot" id="connState">连接中…</div>
+    </aside>
+    <div class="scrim" id="scrim"></div>
+
+    <main class="main">
+      <header class="topbar">
+        <button class="icon-btn menu-btn" id="menuBtn" aria-label="打开议题列表">☰</button>
+        <h1 class="thread-title" id="threadTitle">WeTalk</h1>
+        <button class="btn btn-sm" id="callsBtn" title="每一次调用 AI 的完整快照：prompt、原始回复、配置、CLI 版本、失败记录" hidden>🔍 调用记录</button>
+        <button class="icon-btn" id="deleteThreadBtn" title="删除这个议题" hidden>🗑</button>
+      </header>
+
+      <section class="stage" id="stage" hidden>
+        <div class="seats" id="seats"></div>
+        <div class="stage-controls">
+          <select id="orderSelect" title="发言顺序：固定时按座位顺序（可拖动座位调整），随机时每轮重新洗牌">
+            <option value="fixed">🔢 固定顺序</option>
+            <option value="random">🎲 随机顺序</option>
+          </select>
+          <input id="seedInput" class="seed-input" placeholder="种子" title="随机种子：同一种子排出同样的发言顺序（只重现顺序，不能重现模型的回答）。留空则自动生成并记录" hidden>
+          <select id="memorySelect" title="本议题中 AI 如何使用各自的记忆本">
+            <option value="rw">📓 读写</option>
+            <option value="ro">📓 只读</option>
+            <option value="off">📓 关闭</option>
+          </select>
+          <select id="spaceSelect" title="记忆空间：记忆按「空间 / 参与者」归属。不同空间互相隔离，一个实验的记忆不会改变另一个实验的起点"></select>
+          <select id="roundsSelect" title="轮数">
+            <option value="1">1 轮</option>
+            <option value="2">2 轮</option>
+            <option value="3">3 轮</option>
+            <option value="5">5 轮</option>
+          </select>
+          <button class="btn btn-primary" id="roundBtn">开始讨论</button>
+          <button class="btn" id="proposalBtn" title="让 AI 们对一项提案表决；未通过时自动起草替代方案再表决">🗳 表决</button>
+          <button class="btn btn-danger" id="stopBtn" hidden>停止</button>
+        </div>
+      </section>
+
+      <div class="posts" id="posts"></div>
+
+      <form class="composer" id="composer" hidden>
+        <textarea id="composerInput" rows="3" placeholder="以主持人身份发言……（Ctrl + Enter 发送）"></textarea>
+        <div class="composer-row">
+          <label class="check"><input type="checkbox" id="autoRound" checked> 发言后让选中的 AI 接着讨论</label>
+          <button class="btn btn-primary" type="submit">发言</button>
+        </div>
+      </form>
+    </main>
+  </div>
+
+  <dialog id="threadDialog">
+    <form method="dialog" id="threadForm">
+      <h2>开一个新议题</h2>
+      <label>标题<input name="title" required maxlength="200" placeholder="例如：自我意识只是神经元的一种运作方式吗？"></label>
+      <label>开题发言<textarea name="content" rows="7" placeholder="把你的想法、问题或立场写在这里，AI 们会从这里开始讨论。"></textarea></label>
+      <label>记忆模式
+        <select name="memoryMode">
+          <option value="rw">📓 读写：读取并更新各自的记忆本</option>
+          <option value="ro">📓 只读：参考记忆，但不修改</option>
+          <option value="off">📓 关闭：在没有记忆的状态下讨论（对照组）</option>
+        </select>
+      </label>
+      <label>记忆空间
+        <select name="memorySpace"></select>
+      </label>
+      <label class="check"><input type="checkbox" name="start" checked> 创建后立即让选中的 AI 发言</label>
+      <div class="dialog-actions">
+        <button class="btn" value="cancel" formnovalidate>取消</button>
+        <button class="btn btn-primary" value="ok">创建</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="personaDialog">
+    <form method="dialog" id="personaForm">
+      <h2 id="personaTitle">设置</h2>
+      <div class="field-row">
+        <label class="grow">模型
+          <select name="model"></select>
+          <input name="modelCustom" placeholder="输入模型 id" hidden>
+        </label>
+        <label id="effortField">effort
+          <select name="effort"></select>
+        </label>
+      </div>
+      <p class="hint" id="modelHint"></p>
+      <label>角色设定 / 立场
+        <textarea name="persona" rows="4" placeholder="例如：坚定的功能主义者，认为意识就是信息处理的某种组织方式；对“感受质”之类的说法持怀疑态度。留空表示自由发挥。"></textarea>
+      </label>
+      <div class="dialog-actions">
+        <button class="btn" value="cancel" formnovalidate>取消</button>
+        <button class="btn btn-primary" value="ok">保存</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="proposalDialog" class="medium">
+    <form method="dialog" id="proposalForm">
+      <h2>🗳 发起表决</h2>
+      <label>提案
+        <textarea name="text" rows="5" required maxlength="8000" placeholder="写出要表决的完整方案。例如：从明年起，城市中心区工作日禁止私家燃油车通行，公共交通票价减半，所需资金由拥堵费覆盖。"></textarea>
+      </label>
+      <div class="field-row">
+        <label class="grow">表决规则
+          <select name="rule">
+            <option value="consensus">共识：没有反对票即通过（弃权不阻止）</option>
+            <option value="supermajority">三分之二多数</option>
+            <option value="majority">简单多数</option>
+          </select>
+        </label>
+        <label class="grow">投票方式
+          <select name="ballot">
+            <option value="sealed">密封：互相看不到，投完同时揭晓</option>
+            <option value="open">公开唱票：依次投，后投的能看到前面的票</option>
+          </select>
+        </label>
+      </div>
+      <div class="field-row">
+        <label class="grow">最多表决轮数
+          <select name="maxRounds">
+            <option value="1">1 轮（只表决一次）</option>
+            <option value="2">2 轮</option>
+            <option value="3" selected>3 轮</option>
+            <option value="5">5 轮</option>
+          </select>
+        </label>
+        <label class="grow">未通过后，先讨论
+          <select name="discussRounds">
+            <option value="0">不讨论，直接起草</option>
+            <option value="1">1 轮再起草</option>
+            <option value="2">2 轮再起草</option>
+          </select>
+        </label>
+        <label class="grow">替代方案由谁起草
+          <select name="drafter"></select>
+        </label>
+      </div>
+      <div class="field-row">
+        <label class="grow">唱票顺序（公开唱票时）
+          <select name="voteOrder">
+            <option value="fixed">按座位顺序</option>
+            <option value="random">每轮随机（带种子，可重现）</option>
+          </select>
+        </label>
+        <label class="grow">随机种子
+          <input name="seed" placeholder="留空自动生成，会被记录">
+        </label>
+      </div>
+      <fieldset class="voters">
+        <legend>投票者与各自代表的立场 <small>（只作用于本议题，讨论时也生效）</small></legend>
+        <div id="voterRows"></div>
+        <label class="check"><input type="checkbox" name="humanVotes"> 主持人（我）也投票 —— 密封模式下，AI 的票会在本轮结束前对你隐藏</label>
+      </fieldset>
+      <div class="dialog-actions">
+        <button class="btn" value="cancel" formnovalidate>取消</button>
+        <button class="btn btn-primary" value="ok">发起表决</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="callsDialog" class="wide">
+    <div class="mem-head">
+      <h2>🔍 调用记录</h2>
+      <label class="check"><input type="checkbox" id="callsFailedOnly"> 只看失败</label>
+      <a class="export" id="callsExport" target="_blank" title="本议题所有调用的完整快照（JSON）">导出全部</a>
+      <span class="grow"></span>
+      <button class="icon-btn" id="callsClose" aria-label="关闭">✕</button>
+    </div>
+    <p class="hint" id="callsHint">每一次调用 AI 都有记录——包括失败、超时、解析失败和记忆写入冲突，分析时不会只看见成功的发言。</p>
+    <div class="mem-body">
+      <ol class="mem-history" id="callsList"></ol>
+      <section class="mem-view">
+        <div class="mem-content call-detail" id="callDetail"></div>
+      </section>
+    </div>
+  </dialog>
+
+  <dialog id="memoryDialog" class="wide">
+    <div class="mem-head">
+      <h2>记忆本</h2>
+      <select id="memSpaceSelect" title="记忆空间"></select>
+      <div class="mem-tabs" id="memTabs"></div>
+      <button class="icon-btn" id="memClose" aria-label="关闭">✕</button>
+    </div>
+    <p class="hint">每个 AI 一本私有笔记，跨议题保留，其他 AI 看不到。每次改动都存为新版本，可以对照立场是怎么变的。</p>
+    <div class="mem-body">
+      <ol class="mem-history" id="memHistory"></ol>
+      <section class="mem-view">
+        <div class="mem-toolbar">
+          <span class="mem-label" id="memLabel"></span>
+          <label class="check"><input type="checkbox" id="memDiff" checked> 对比上一版</label>
+          <button class="btn" id="memEditBtn">编辑 / 植入</button>
+        </div>
+        <div class="mem-content" id="memContent"></div>
+        <form class="mem-edit" id="memEditForm" hidden>
+          <textarea name="content" rows="12" placeholder="以主持人身份改写这本记忆。会存为新版本，AI 下次发言时会读到——可以用来做“植入记忆”的实验。"></textarea>
+          <div class="dialog-actions">
+            <button class="btn" type="button" id="memEditCancel">取消</button>
+            <button class="btn btn-primary" type="submit">保存为新版本</button>
+          </div>
+        </form>
+      </section>
+    </div>
+  </dialog>
+
+  <div class="toasts" id="toasts"></div>
+  <script src="/app.js" type="module"></script>
+</body>
+</html>

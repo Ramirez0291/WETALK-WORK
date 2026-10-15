@@ -1,0 +1,14 @@
+{
+  "name": "wetalk",
+  "version": "0.1.0",
+  "description": "本地多 AI 研讨室：Claude Code / Codex / Antigravity 同场讨论",
+  "license": "Apache-2.0",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "start": "node server.mjs"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
