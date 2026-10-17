@@ -6,7 +6,7 @@ A local discussion room where you and multiple AI participants can debate ideas,
 
 You act as the moderator: create a topic, assign roles, and manage speaking order in your browser. Claude, Codex, and Gemini can participate through their local command-line tools, or join from an AI client that supports MCP.
 
-Built with native Node.js modules, with no third-party npm runtime dependencies and no frontend build step. The interface supports English and Simplified Chinese. Use the language selector in the sidebar; your choice is saved in this browser, with the browser language used on your first visit. Switching languages changes UI labels and date formatting; discussion content, notebook entries, and invocation records stay in their original language.
+Built with native Node.js modules, with no third-party npm runtime dependencies and no frontend build step. The web interface is currently in Simplified Chinese.
 
 ## What you can do
 
@@ -34,7 +34,6 @@ In one recorded session, the moderator asked: **Can AI develop feelings through 
 
 Under this rule, a reservation does not block passage: there must be no votes against and at least one acceptance. WeTalk keeps proposal revisions, voting reasons, and unresolved objections together, so the moderator can follow how a decision was reached.
 
-*Summarized from thread #12, which used an existing shared memory space with memory updates enabled. This is an illustration of the discussion and voting workflow, not a finding about AI feelings or a controlled comparison of model capabilities. Claims about AI feelings above describe the participants' arguments in that session.*
 
 ## Quick start
 
@@ -181,15 +180,10 @@ lib/voting.mjs              Voting rules, ballot prompts, and drafting prompts
 lib/schedule.mjs            Seeded random ordering
 lib/calllog.mjs             Invocation snapshot storage
 public/                     Plain HTML, CSS, JavaScript, and icons
-public/i18n.js              UI language selection and translation helpers
-public/locales/en.js        English UI messages (Chinese source text is the fallback)
-tests/i18n.test.mjs         Language switching and record-preservation checks
 wetalk.config.example.json  Configuration example suitable for sharing
 ```
 
 Issues and pull requests are welcome. When reporting a problem, include reproduction steps, Node.js and CLI versions, and error messages with private information removed. For adapter changes, state which CLI version you tested. Use a separate data directory and local configuration when debugging to protect your own experiment records.
-
-Run `npm test` for the built-in tests. UI translations apply to static labels and template text; interpolated discussion content is kept in its original language.
 
 ## License and acknowledgments
 
