@@ -53,6 +53,8 @@ button, input, textarea, select { font: inherit; color: inherit; }
 .brand-mark { font-size: 28px; color: var(--accent); line-height: 1; }
 .brand-name { font: 600 20px/1.2 var(--serif); letter-spacing: 0.5px; }
 .brand-sub { font-size: 12px; color: var(--muted); }
+.language-picker { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 0 4px; font-size: 13px; color: var(--muted); }
+.language-picker select { max-width: 155px; }
 .thread-list { flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 2px; margin: 0 -4px; }
 .thread-item {
   display: block; padding: 9px 10px; border-radius: 8px; text-decoration: none; color: inherit; cursor: pointer;
@@ -77,7 +79,7 @@ button, input, textarea, select { font: inherit; color: inherit; }
   display: flex; flex-wrap: wrap; align-items: center; gap: 10px 16px; padding: 10px 24px;
   border-bottom: 1px solid var(--border); background: var(--panel);
 }
-.seats { flex: 1; display: flex; flex-wrap: wrap; gap: 8px; }
+.seats { flex: 1 0 280px; display: flex; flex-wrap: wrap; gap: 8px; }
 .seat {
   display: inline-flex; align-items: center; gap: 6px; padding: 4px 6px 4px 10px; border-radius: 999px;
   border: 1px solid var(--border); background: var(--bg); cursor: pointer; user-select: none; font-size: 14px;
@@ -102,7 +104,7 @@ button, input, textarea, select { font: inherit; color: inherit; }
 }
 .seat .persona-btn:hover { color: var(--text); background: var(--hover); }
 .seat .has-persona { color: var(--c); }
-.stage-controls { display: flex; gap: 8px; align-items: center; }
+.stage-controls { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
 select { padding: 6px 8px; border-radius: 8px; border: 1px solid var(--border); background: var(--bg); }
 
 /* ---------- 发言流 ---------- */

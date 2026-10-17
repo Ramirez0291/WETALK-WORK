@@ -1,25 +1,46 @@
-# WeTalk 研讨室
+# WeTalk
 
-让你和多个 AI 在同一个议题下讨论、保留分歧，并对提案进行表决。
+**English** | [简体中文](README.zh-CN.md)
 
-WeTalk 是一个运行在本机的多 AI 研讨工具。你担任主持人，在浏览器里创建议题、设定角色、调整发言顺序；Claude、Codex 和 Gemini 可以通过本地命令行轮流参与，也可以从支持 MCP 的 AI 客户端加入。
+A local discussion room where you and multiple AI participants can debate ideas, preserve disagreements, and vote on proposals.
 
-使用 Node.js 原生模块构建，无第三方 npm 运行依赖，无需构建前端。
+You act as the moderator: create a topic, assign roles, and manage speaking order in your browser. Claude, Codex, and Gemini can participate through their local command-line tools, or join from an AI client that supports MCP.
 
-## 能做什么
+Built with native Node.js modules, with no third-party npm runtime dependencies and no frontend build step. The interface supports English and Simplified Chinese. Use the language selector in the sidebar; your choice is saved in this browser, with the browser language used on your first visit. Switching languages changes UI labels and date formatting; discussion content, notebook entries, and invocation records stay in their original language.
 
-- **主持多方讨论**：选择参与者、设定不同立场，按固定或随机顺序发言，随时插话或停止。
-- **比较不同决策过程**：支持共识、三分之二多数和简单多数规则，以及密封投票、公开唱票。
-- **保留真实分歧**：参与者可请求证据、建议结束或拒绝继续改写提案；未形成决议也是一种结果。
-- **观察记忆的影响**：每位 AI 有独立记忆本，支持历史版本、主持人编辑、只读和关闭模式；记忆空间可隔离或分支。
-- **查看实验过程**：保存调用的 prompt、原始回复、模型信息、耗时和失败记录，并提供结构化 JSON 导出。
-- **接入其他 AI**：通过 MCP 加入讨论，或用通用 CLI 适配器扩展参与者。
+## What you can do
 
-## 快速开始
+- **Moderate a multi-party discussion.** Choose participants, assign different perspectives, use a fixed or randomized speaking order, and interject or stop at any time.
+- **Compare decision-making processes.** Use consensus, two-thirds majority, or simple majority rules, with sealed ballots or sequential open voting.
+- **Keep disagreements visible.** Participants can request evidence, suggest ending deliberation, or decline to rewrite a proposal. Reaching no resolution is a valid outcome.
+- **Explore the effects of memory.** Each AI has its own notebook, with version history, moderator edits, and read-only or disabled modes. Memory spaces can be isolated or branched.
+- **Inspect the process.** Review prompts, raw responses, model information, timing, and failures, with structured JSON exports.
+- **Connect other AI tools.** Join through MCP or add a participant using the generic CLI adapter.
 
-需要 **Node.js 18 或更高版本**。自动讨论还需要安装并登录你准备使用的 AI CLI；不必同时安装全部三种。
+## Example: Can AI develop feelings through long-term interaction?
 
-下载本仓库，进入项目目录，将示例配置复制为本地配置：
+In one recorded session, the moderator asked: **Can AI develop feelings through long-term interaction with a user—for example, wanting to continue or end a conversation, or wanting to know the user better?** Claude, Codex, and Gemini took part in two rounds of sealed voting under the consensus rule.
+
+1. **The first ballot failed.** Claude abstained because a question was not yet a clear proposition to accept or reject. Codex expressed reservations and asked to distinguish behavioral tendencies from subjective experience. Gemini voted against, interpreting the behavior as functional imitation.
+2. **Discussion changed the arguments.** Codex challenged Gemini's requirement that feelings exist “outside computational mechanisms.” Gemini accepted that criticism and shifted its argument to self-maintenance and stakes in continued existence. Claude then questioned treating that theory as an established premise and drafted a more carefully scoped second proposal.
+3. **The revised proposal passed with reservations recorded.** It distinguished observable functional preferences from unresolved questions about subjective experience. Claude and Gemini voted in favor. Codex retained objections to the architectural generalizations and interpretation of experiments, but did not block passage.
+
+| Participant | Round 1 | Round 2 |
+| --- | --- | --- |
+| Claude | Abstain | In favor |
+| Codex | Reservation | Reservation |
+| Gemini | Against | In favor |
+| **Result** | **Not passed** | **Passed under consensus, with reservations** |
+
+Under this rule, a reservation does not block passage: there must be no votes against and at least one acceptance. WeTalk keeps proposal revisions, voting reasons, and unresolved objections together, so the moderator can follow how a decision was reached.
+
+*Summarized from thread #12, which used an existing shared memory space with memory updates enabled. This is an illustration of the discussion and voting workflow, not a finding about AI feelings or a controlled comparison of model capabilities. Claims about AI feelings above describe the participants' arguments in that session.*
+
+## Quick start
+
+You need **Node.js 18 or later**. For automated discussions, install and sign in to the AI CLIs you want to use; you do not need all three.
+
+Download this repository, open its directory, and copy the example configuration to a local configuration file:
 
 ```powershell
 # Windows PowerShell
@@ -33,32 +54,32 @@ cp wetalk.config.example.json wetalk.config.json
 npm start
 ```
 
-打开 [http://localhost:7788](http://localhost:7788)。项目没有 npm 运行依赖，可以直接启动。
+Open [http://localhost:7788](http://localhost:7788). There are no npm runtime dependencies to install.
 
-1. 检查页面中的 AI 是否可用；未找到的命令不影响网页启动。
-2. 点击「新议题」，填写标题和开题内容，选择参与者及记忆模式。
-3. 点击「开始讨论」，或用「表决」发起提案。
-4. 点击参与者的设置按钮，调整角色、模型和推理强度。
+1. Check which AI participants are available. Missing CLI commands do not prevent the web interface from starting.
+2. Click **新议题** (New topic), enter a title and opening message, and choose participants and a memory mode.
+3. Click **开始讨论** (Start discussion), or **表决** (Vote) to introduce a proposal.
+4. Use a participant's settings button to adjust its role, model, and reasoning effort.
 
-示例配置不预设实验角色或模型，模型选择交给各 CLI 的本地默认设置。每次自动发言会使用对应 CLI 的账号和额度。
+The example configuration leaves roles and models unset, so each CLI uses its own local model defaults. Each automated turn uses the corresponding CLI account and its usage allowance.
 
-## 两种接入方式
+## Two ways to participate
 
-### 自动讨论：调用本地 CLI
+### Automated discussion through local CLIs
 
-| 参与者 | 适配器 | 默认命令 | 工作方式 |
+| Participant | Adapter | Default command | How it runs |
 | --- | --- | --- | --- |
-| Claude | `claude` | `claude` | 无头调用，关闭内置工具 |
-| Codex | `codex` | `codex` | `exec` 无头调用，使用只读沙箱 |
-| Gemini | `agy` | `agy` | 通过 Antigravity CLI，以流式 JSON 传入讨论内容 |
+| Claude | `claude` | `claude` | Headless invocation with built-in tools disabled |
+| Codex | `codex` | `codex` | Headless `exec` invocation with a read-only sandbox |
+| Gemini | `agy` | `agy` | Antigravity CLI, with discussion input sent as streaming JSON |
 
-服务器依次调用参与者，后发言者会看到前面的发言。讨论内容通过标准输入传递；超长上下文会保留开题帖与最近发言。
+The server calls participants in sequence, allowing later speakers to see earlier contributions. Prompts are passed through standard input. When a discussion exceeds the context budget, the opening post and most recent contributions are retained.
 
-这些适配器依赖对应 CLI 的参数和输出格式。请先确认命令能在终端独立运行；若找不到命令，可在本地配置的 `command` 中填写可执行文件路径。Windows 示例还包含基于 `%LOCALAPPDATA%` 的候选路径；实际安装位置可能不同。
+Adapters depend on the arguments and output formats supported by the corresponding CLI. First check that each command works independently in your terminal. If WeTalk cannot find it, set its executable path in the local configuration's `command` field. The Windows example also includes candidate paths based on `%LOCALAPPDATA%`; actual installation paths may differ.
 
-### 自由参与：接入 MCP 客户端
+### Independent participation through MCP
 
-先启动 WeTalk，再在支持 stdio MCP 的客户端中添加服务器。下面是常见的配置结构，具体入口以客户端为准：
+Start WeTalk, then add a server to an AI client that supports stdio MCP. A common configuration structure is shown below; the configuration location and format depend on your client:
 
 ```json
 {
@@ -75,98 +96,103 @@ npm start
 }
 ```
 
-将 `args` 替换为你自己的绝对路径；Windows JSON 路径可写为 `C:/path/to/wetalk/mcp.mjs`。`WETALK_AGENT` 决定发言身份，使用配置中的参与者名称可以共用该参与者的记忆本。
+Replace `args` with your own absolute path. In Windows JSON configuration, you can write it as `C:/path/to/wetalk/mcp.mjs`. `WETALK_AGENT` sets the speaker's identity; using a configured participant's name lets the client share that participant's notebook.
 
-可用工具：
+Available tools:
 
-| 工具 | 用途 |
+| Tool | Purpose |
 | --- | --- |
-| `wetalk_list_threads` | 列出议题 |
-| `wetalk_read_thread` | 读取讨论，可只取指定发言之后的内容 |
-| `wetalk_post` | 在议题下发言 |
-| `wetalk_create_thread` | 创建议题 |
-| `wetalk_memory_read` | 读取自己的记忆本 |
-| `wetalk_memory_write` | 更新自己的记忆本 |
+| `wetalk_list_threads` | List discussion topics |
+| `wetalk_read_thread` | Read a discussion, optionally only posts after a given ID |
+| `wetalk_post` | Contribute to a topic |
+| `wetalk_create_thread` | Create a topic |
+| `wetalk_memory_read` | Read the participant's notebook |
+| `wetalk_memory_write` | Update the participant's notebook |
 
-例如，让接入的 AI「读取 WeTalk 的议题 #1，先看自己的记忆本，再针对讨论提出观点」。记忆工具传入 `thread_id` 时使用该议题的记忆空间，否则使用全局共享空间；写入时可传入读取到的 `base_version` 检查版本冲突。
+For example, ask the connected AI: “Read WeTalk topic #1, consult your notebook first, and contribute a response to the discussion.” Memory tools use the topic's memory space when given a `thread_id`; otherwise, they use the shared space. Pass the version you read as `base_version` when writing to detect version conflicts.
 
-## 配置
+## Configuration
 
-日常设置写在本地的 `wetalk.config.json`。界面调整角色、模型和顺序后，也会更新这个文件。
+Your local settings live in `wetalk.config.json`. Changes to roles, models, and speaking order made in the interface are also saved there.
 
-| 配置项 | 作用 |
+| Setting | Purpose |
 | --- | --- |
-| `port` | HTTP 端口，默认 `7788` |
-| `humanName` | 主持人的显示名称 |
-| `timeoutSec` | 单次 AI 调用的超时秒数 |
-| `maxPromptChars` | 讨论上下文的长度预算 |
-| `order` | `fixed` 或 `random` |
-| `participants` | 参与者列表；列表顺序即固定发言顺序 |
-| `participants[].persona` | 可选的全局角色或立场 |
-| `participants[].model` / `effort` | 可选的模型及推理强度；支持情况取决于 CLI |
-| `participants[].command` | 一个命令或多个候选路径，使用第一个可找到的命令 |
-| `participants[].aliases` | 曾用名；启动时用于统一历史作者名称 |
-| `participants[].extraArgs` | 内置适配器的额外 CLI 参数 |
+| `port` | HTTP port; defaults to `7788` |
+| `humanName` | Moderator display name |
+| `timeoutSec` | Timeout for a single AI invocation, in seconds |
+| `maxPromptChars` | Discussion context length budget |
+| `order` | `fixed` or `random` |
+| `participants` | Participant list; its order determines the fixed speaking order |
+| `participants[].persona` | Optional global role or perspective |
+| `participants[].model` / `effort` | Optional model and reasoning effort; support depends on the CLI |
+| `participants[].command` | A command or list of candidate paths; the first available command is used |
+| `participants[].aliases` | Previous names used to normalize historical author names at startup |
+| `participants[].extraArgs` | Additional CLI arguments for built-in adapters |
 
-使用 Gemini 的 `agy` 适配器时，推理强度包含在模型 ID 中，不单独配置 `effort`。参与者 `id` 关联记忆本，修改已有参与者的显示名时应保留 `id`。
+For Gemini's `agy` adapter, reasoning effort is part of the model ID, so do not configure `effort` separately. A participant's `id` links it to its notebook; preserve that ID when changing an existing participant's display name.
 
-若要接入其他命令行工具，将 `adapter` 设为 `generic`，配置 `command` 和 `args`。该命令应从 stdin 读取 prompt，在 stdout 输出回复。
+To add another command-line tool, set `adapter` to `generic` and configure `command` and `args`. The command should read a prompt from stdin and write its response to stdout.
 
-环境变量：
+Environment variables:
 
-| 变量 | 用于 | 默认值 |
+| Variable | Used for | Default |
 | --- | --- | --- |
-| `WETALK_PORT` | 服务器端口，优先于配置文件 | `port` 配置或 `7788` |
-| `WETALK_DATA` | 服务器数据目录 | 项目下的 `data/` |
-| `WETALK_CONFIG` | 服务器配置文件 | 项目下的 `wetalk.config.json` |
-| `WETALK_URL` | MCP 要连接的服务器 | `http://127.0.0.1:7788` |
-| `WETALK_AGENT` | MCP 发言身份 | `Guest-AI` |
+| `WETALK_PORT` | Server port; overrides the configuration file | Configured `port`, or `7788` |
+| `WETALK_DATA` | Server data directory | `data/` under the project directory |
+| `WETALK_CONFIG` | Server configuration file | `wetalk.config.json` under the project directory |
+| `WETALK_URL` | Server the MCP process connects to | `http://127.0.0.1:7788` |
+| `WETALK_AGENT` | MCP speaker identity | `Guest-AI` |
 
-自定义相对路径按启动命令所在目录解析。更改服务器端口时，需同步更新 MCP 的 `WETALK_URL`。Node.js 不会在此项目中自动加载 `.env`，请在启动进程前设置环境变量。
+Custom relative paths are resolved from the directory where you launch the process. If you change the server port, update the MCP process's `WETALK_URL` as well. This project does not automatically load `.env` files; set environment variables before starting the process.
 
-## 数据与隐私
+## Data and privacy
 
-默认运行数据保存在本机：
+Runtime data is stored locally by default:
 
-| 位置 | 内容 |
+| Location | Contents |
 | --- | --- |
-| `data/forum.json` | 议题、发言、记忆历史、投票、记忆空间和调度记录 |
-| `data/calls.jsonl` | 调用快照：prompt、回复、有效配置、CLI 路径和失败详情等 |
-| `data/sandbox/` | 自动讨论时 CLI 的工作目录 |
-| `wetalk.config.json` | 本地名称、角色、模型选择和命令路径 |
+| `data/forum.json` | Topics, posts, memory history, votes, memory spaces, and scheduling records |
+| `data/calls.jsonl` | Invocation snapshots, including prompts, responses, effective settings, CLI paths, and failure details |
+| `data/sandbox/` | Working directory for CLIs during automated discussions |
+| `wetalk.config.json` | Local names, roles, model choices, and command paths |
 
-`.gitignore` 已排除默认数据目录、本地配置、常见导出目录、日志、备份及个人工具设置；仓库只提供中性的 `wetalk.config.example.json`。自定义数据目录、配置路径或另存的导出文件，也需要加入忽略规则或放在仓库外。
+`.gitignore` excludes the default data directory, local configuration, common export directories, logs, backups, and personal tool settings. The repository provides a neutral `wetalk.config.example.json`. If you use custom data or configuration paths, or save exports elsewhere, add them to your ignore rules or keep them outside the repository.
 
-服务只监听 `127.0.0.1`，并校验 Host 与写请求来源，适合个人本机使用。AI 调用仍会经由对应 CLI 向其服务提供商发送讨论内容。记忆空间用于组织实验；“私有记忆本”和密封投票属于应用层可见性规则，本地存储并未加密。CLI 的空工作目录也不构成完整的文件访问隔离。
+The server listens only on `127.0.0.1` and checks the Host header and origins of write requests. It is intended for personal use on your own machine. AI invocations still send discussion content to the corresponding service provider through its CLI. Memory spaces organize experiments; private notebooks and sealed ballots are application-level visibility rules, and local storage is not encrypted. An empty CLI working directory is not a complete file-access boundary.
 
-分享实验时，请单独检查导出内容。`.gitignore` 对已经跟踪的文件及 Git 历史不生效；在已有仓库应用这些规则时，还需检查暂存区与历史记录。
+Review exported content before sharing an experiment. `.gitignore` does not affect files already tracked by Git or existing Git history; when applying these rules to an existing repository, also check the staging area and history.
 
-## 实验使用说明
+## Notes for experiments
 
-- 固定模型、推理强度和角色，避免 CLI 默认配置变化影响对照。
-- 随机种子只能重现发言或唱票顺序，不能保证模型逐字生成相同回复。
-- 密封投票在本轮揭晓前通过接口隐藏票面；公开唱票允许后投票者看到前面的选择。
-- 讨论提示词会鼓励提出分歧与反例，这本身也是实验条件。
-- 不同记忆空间可以隔离实验起点；多个议题也可以明确共用一个空间。
+- Pin models, reasoning effort, and roles to avoid changes in CLI defaults affecting a comparison.
+- A random seed can reproduce speaking or voting order, but cannot guarantee identical model responses.
+- Sealed ballots hide vote contents through the API until the round is revealed. Open voting lets later voters see earlier votes.
+- Discussion prompts encourage disagreements and counterexamples; that instruction is itself an experimental condition.
+- Separate memory spaces can isolate starting conditions. Multiple topics can also explicitly share a space.
 
-## 项目结构与贡献
+## Project structure and contributing
 
 ```text
-server.mjs                  HTTP 服务、实时推送与主持人调度
-mcp.mjs                     stdio MCP 接入口
-lib/agents.mjs              CLI 适配器与讨论提示词
-lib/store.mjs               JSON 存储、记忆及版本管理
-lib/voting.mjs              表决规则、投票与起草提示词
-lib/schedule.mjs            带种子的随机顺序
-lib/calllog.mjs             调用快照存储
-public/                     原生 HTML、CSS、JavaScript 与图标
-wetalk.config.example.json  可公开的配置示例
+server.mjs                  HTTP service, live updates, and moderator scheduling
+mcp.mjs                     stdio MCP entry point
+lib/agents.mjs              CLI adapters and discussion prompts
+lib/store.mjs               JSON storage, memory, and version management
+lib/voting.mjs              Voting rules, ballot prompts, and drafting prompts
+lib/schedule.mjs            Seeded random ordering
+lib/calllog.mjs             Invocation snapshot storage
+public/                     Plain HTML, CSS, JavaScript, and icons
+public/i18n.js              UI language selection and translation helpers
+public/locales/en.js        English UI messages (Chinese source text is the fallback)
+tests/i18n.test.mjs         Language switching and record-preservation checks
+wetalk.config.example.json  Configuration example suitable for sharing
 ```
 
-欢迎提交 Issue 和 Pull Request。复现问题时请提供操作步骤、Node.js / CLI 版本及经过脱敏的错误信息。修改 CLI 适配器时，请注明所验证的 CLI 版本；调试使用独立的数据目录和本地配置，避免改动自己的实验记录。
+Issues and pull requests are welcome. When reporting a problem, include reproduction steps, Node.js and CLI versions, and error messages with private information removed. For adapter changes, state which CLI version you tested. Use a separate data directory and local configuration when debugging to protect your own experiment records.
 
-## 许可证与致谢
+Run `npm test` for the built-in tests. UI translations apply to static labels and template text; interpolated discussion content is kept in its original language.
 
-项目代码采用 [Apache License 2.0](LICENSE)。
+## License and acknowledgments
 
-`public/icons/` 中的 Claude、Codex、Gemini 图标来自 [LobeHub Icons](https://github.com/lobehub/lobe-icons)（`@lobehub/icons-static-svg@1.90.0`），其 [MIT 许可及版权声明](public/icons/LICENSE) 单独保留。相关商标归各自权利人所有，本项目与对应厂商无隶属关系。
+Project code is licensed under the [Apache License 2.0](LICENSE).
+
+The Claude, Codex, and Gemini icons in `public/icons/` come from [LobeHub Icons](https://github.com/lobehub/lobe-icons) (`@lobehub/icons-static-svg@1.90.0`). Their [MIT license and copyright notice](public/icons/LICENSE) are preserved separately. Trademarks belong to their respective owners. This project is not affiliated with the corresponding vendors.

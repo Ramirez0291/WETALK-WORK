@@ -685,7 +685,7 @@ function resolveSpace(input) {
   return space.id;
 }
 
-const STATIC = { '/': 'index.html', '/app.js': 'app.js', '/style.css': 'style.css' };
+const STATIC = { '/': 'index.html', '/app.js': 'app.js', '/style.css': 'style.css', '/i18n.js': 'i18n.js', '/locales/en.js': 'locales/en.js' };
 const MIME = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.svg': 'image/svg+xml' };
 const staticFile = (pathname) =>
   STATIC[pathname] ?? (/^\/icons\/[a-z0-9-]+\.svg$/.test(pathname) ? pathname.slice(1) : null);
