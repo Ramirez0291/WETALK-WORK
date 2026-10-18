@@ -14,6 +14,7 @@ import { createDeepseekClient } from '../../lib/workbench/deepseek.mjs';
 import { resetPhase, phaseSpace } from '../../lib/workbench/phases.mjs';
 import { createStore } from '../../lib/store.mjs';
 import { runAgent, parseCodexEvents } from '../../lib/agents.mjs';
+import { createCallLog } from '../../lib/calllog.mjs';
 import { startMock, chatOk, apiError } from './mock-deepseek.mjs';
 import { setup, restart, DEFAULTS, ROOT, tmpBase, cleanup } from './helpers.mjs';
 
@@ -387,4 +388,90 @@ test('复审 R2 有成员还没交稿时揭晓：409，任何正文都不写；�
   await e.runner.idle();
   const r = e.runner.reveal('甲', 'R-wait');
   assert.equal(r.results.length, 2);
+});
+
+// ---------- 第三轮复审（WP4-round3-review-2026-10-19）----------
+
+// 逐行解析整个文件：任何一行不是合法 JSON 就失败
+const parseAll = (file) => fs.readFileSync(file, 'utf8').split('\n').filter(Boolean).map((line) => JSON.parse(line));
+
+test('复审三 R1 揭晓补写调用记录时只写进半条就磁盘满：重试揭晓后文件逐行可解析，当前日志与重新打开的日志都读得到，每次调用恰好一条补写', async () => {
+  const { e, a, b } = await pairRound();
+  const file = path.join(e.workbench.get('甲').dir, 'calls.jsonl');
+  // 第一份完整写完；第二份的补写真的落下一半字节，然后报 ENOSPC
+  const orig = fs.appendFileSync;
+  let armed = false;
+  fs.appendFileSync = function (f, data, ...rest) {
+    if (armed && typeof f === 'string' && path.resolve(f) === file) {
+      armed = false;
+      const bytes = Buffer.isBuffer(data) ? data : Buffer.from(data);
+      orig.call(this, f, bytes.subarray(0, Math.floor(bytes.length / 2)), ...rest);
+      throw Object.assign(new Error('模拟：写进一半后磁盘满'), { code: 'ENOSPC' });
+    }
+    return orig.call(this, f, data, ...rest);
+  };
+  const origComplete = e.board.completeSealed;
+  e.board.completeSealed = (p, id, res) => {
+    const out = origComplete(p, id, res);
+    if (id === a.id) armed = true;
+    return out;
+  };
+  try {
+    assert.throws(() => e.runner.reveal('甲', 'R-pair'), (err) => err.code === 'ENOSPC');
+  } finally {
+    fs.appendFileSync = orig;
+    e.board.completeSealed = origComplete;
+  }
+  assert.equal(armed, false, '故障没有触发');
+  assert.equal(e.board.get('甲', b.id).state, 'submitted'); // 没写成就不完成，轮次保留
+  assert.ok(e.sealed.status('甲', 'R-pair'));
+  parseAll(file); // 半条已经截掉
+
+  e.runner.reveal('甲', 'R-pair');
+  assert.equal(e.board.get('甲', b.id).state, 'done');
+  const callIds = e.runner.callLogOf('甲').list((c) => c.task && !c.fill_of).map((c) => c.id);
+  const check = (records, where) => {
+    for (const id of callIds) assert.equal(records.filter((r) => r.fill_of === id).length, 1, `${where}：调用 ${id}`);
+  };
+  check(parseAll(file), '逐行解析');
+  check(e.runner.callLogOf('甲').getMany((c) => c.fill_of != null), '当前日志');
+  check(createCallLog(file).getMany((c) => c.fill_of != null), '重新打开');
+  assert.match(createCallLog(file).getMany((c) => c.fill_of != null).find((r) => r.task === b.id).raw, /DRAFT-TWO/);
+});
+
+test('复审三 R1 调用日志：截不回边界时下一次追加先修复、修不好就拒绝写入；打开时截掉末尾半条、给缺换行的完整记录补换行', () => {
+  const dir = tmpBase();
+  const file = path.join(dir, 'calls.jsonl');
+  const log = createCallLog(file);
+  log.append({ purpose: 'a' });
+  const orig = { appendFileSync: fs.appendFileSync, truncateSync: fs.truncateSync };
+  // 追加写进半条后失败，截断也失败：日志记下“尾部脏”
+  fs.appendFileSync = function (f, data, ...rest) {
+    orig.appendFileSync.call(this, f, Buffer.from(data).subarray(0, 5), ...rest);
+    throw Object.assign(new Error('磁盘满'), { code: 'ENOSPC' });
+  };
+  fs.truncateSync = () => { throw Object.assign(new Error('截不回去'), { code: 'EIO' }); };
+  try {
+    assert.throws(() => log.append({ purpose: 'b' }), /磁盘满/);
+    fs.appendFileSync = orig.appendFileSync;
+    // 修复仍然失败：拒绝写入，不在半条后面接着写
+    assert.throws(() => log.append({ purpose: 'c' }), /截不回去/);
+  } finally {
+    Object.assign(fs, orig);
+  }
+  log.append({ purpose: 'd' }); // 这次先截掉半条再写
+  assert.deepEqual(parseAll(file).map((r) => r.purpose), ['a', 'd']);
+  assert.deepEqual(log.getMany(() => true).map((r) => r.purpose), ['a', 'd']);
+
+  // 打开时：末尾半条截掉
+  fs.appendFileSync(file, '{"purpose":"hal');
+  const reopened = createCallLog(file);
+  reopened.append({ purpose: 'e' });
+  assert.deepEqual(parseAll(file).map((r) => r.purpose), ['a', 'd', 'e']);
+  // 打开时：完整但缺换行的最后一条补上换行
+  fs.appendFileSync(file, JSON.stringify({ id: 99, purpose: 'f' }));
+  const again = createCallLog(file);
+  again.append({ purpose: 'g' });
+  assert.deepEqual(parseAll(file).map((r) => r.purpose), ['a', 'd', 'e', 'f', 'g']);
+  assert.deepEqual(createCallLog(file).getMany(() => true).map((r) => r.purpose), ['a', 'd', 'e', 'f', 'g']);
 });
