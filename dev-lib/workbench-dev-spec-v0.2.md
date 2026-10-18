@@ -2,6 +2,8 @@
 
 Oct 18, 2026 · @LI(RAMI)LINGYUE
 
+> 本地修订（2026-10-18，WP1 评审后经主持人同意）：模块清单补 `git.mjs`、`fsx.mjs`，`templates/` 分为项目骨架与 PPT 模板；数据模型补 `provenance`（内容生产者身份）；契约二补 git 留档的字面路径与换行约定；PowerPoint 待定事项更新；修正路径笔误。线上版本尚未同步这些修订。
+
 本文档把 claudework 多 Agent 工坊设计 V2 拆成可开发的工作包，在从 WETALK 派生的新仓库（暂名 `WETALK-WORK`）里实现。WETALK 本身保持轻便，不合入工坊功能。v0.2 根据评审补了四份核心契约（证据与核验、提交与恢复、任务与租约、上下文与可见性），状态改为由记录派生，并重排了工作包。
 
 ## 范围与约束
@@ -71,13 +73,17 @@ WETALK-WORK/
 │  ├─ scheduler.mjs    规则调度循环：派发、冷却、争议分流
 │  ├─ changelog.mjs    改动记录与停滞检测
 │  ├─ web.mjs          DeepSeek Search / Fetch 封装
+│  ├─ git.mjs          git 留档：只按字面路径提交本次清单里的文件
+│  ├─ fsx.mjs          Windows 兼容的文件操作：改名遇到占用时退避重试
 │  └─ export/
 │     ├─ markdown.mjs   幻灯片源 → Markdown
 │     ├─ pptx.py        幻灯片源 ＋ 模板 → PPTX（python-pptx），并读回核对
 │     ├─ render.py      PPTX → PDF / 图片，字体检查
 │     └─ agent.mjs      指定 Agent 负责导出时的任务封装
 ├─ lib/agents.mjs       ＋ deepseek 适配器、无工具与只读目录两种调用、Codex 命令审计
-├─ templates/           PPT 模板文件
+├─ templates/
+│  ├─ project/         项目骨架：project.md、protocol.json、baseline.md
+│  └─ pptx/            PPT 模板文件
 ├─ workbench.defaults.json   可调参数默认值
 └─ tests/workbench/*.test.mjs
 ```
@@ -124,10 +130,13 @@ WETALK-WORK\projects          整个目录是一个 git 仓库
 | 核验记录 | `verifications/V###.json` | target（论断 id@version）、source\_versions、verdict、reason、support\_quote、verifier（Agent、模型、厂商，或你） | 提交入口 |
 | 异议 | `objections/O###.json` | target、category、pointer、state、raised\_by、resolution | 提交入口 |
 | 作品 | `outline/` `script/` `slides/` | 页或节的 id、claims | 提交入口 |
+| 内容来源 | 每条正式记录的每个版本都带 `provenance` | 主体类型（agent / human）、参与者、实际模型与厂商、task 与 attempt、判定依据、是否已证实 | 提交入口（从服务端保存的任务尝试和调用记录派生，不采信请求里自报的身份） |
 | 候选稿 | `candidates/<任务>-<尝试>/` | 结果内容、提交时的依赖版本、request\_id | 提交入口 |
 | 任务 | `tasks/T###.json` | 见“契约三” | 调度程序 |
 | 提交日志 | `_txn/` 与 `commits.jsonl` | 见“契约二” | 提交入口 |
 | 事件 | `events.jsonl` | 仅用于审计，只追加 | 服务进程 |
+
+**内容来源（provenance）。** 来源卡的 `author` 指文献作者，内容生产者另用 `provenance` 表示，避免同名混淆。它由提交入口从服务端保存的任务尝试、租约和调用记录派生，请求里自报的 author、model、vendor 一律不采信。重试或换模型时按新的尝试重新派生，不沿用旧身份。人类提交走受控入口，记为 human；MCP 外部会话绑定服务端登记的主体与租约，无法证实实际模型或厂商时记为 unverified，不能计入跨厂商的独立核验。人工编辑和移植补丁保留原内容的来源关系。人类核验如何计数在契约一里规定。
 
 **论断的派生状态**（每次读取时计算，提交者不能直接写）：
 
@@ -242,7 +251,8 @@ WETALK-WORK\projects          整个目录是一个 git 仓库
 **其他约定：**
 
 - 界面上每次提交分开显示两个状态：数据已提交；留档已完成、待重试或失败。
-- 启动时在 projects 目录建锁文件（含进程号），发现已有存活的服务实例就拒绝启动。
+- 启动时在 projects 目录建锁文件（含进程号），发现已有存活的服务实例就拒绝启动。新建项目、晋升和 git 留档都经同一个仓库级队列，服务未运行时的命令行工具也要先取得这把锁。
+- git 留档按字面路径提交（`--literal-pathspecs`），项目名里的方括号等字符不会被当成通配，从而带上别的项目的改动；projects 仓库关闭换行转换（`core.autocrlf=false`），并由测试按字节核对留档内容与正式文件一致。
 
 **验收案例**
 
@@ -342,7 +352,7 @@ WETALK-WORK\projects          整个目录是一个 git 仓库
 ### WP1 内容标准与基线
 
 - 从 WETALK 派生工坊仓库（暂名 `WETALK-WORK`），把 WETALK 设为 upstream 远程。
-- 建 ``WETALK-WORK\projects` 并初始化为 git 仓库；项目模板 `project.md` 写受众、观众看完应理解什么、篇幅与页数、风格、验收标准。
+- 建 `WETALK-WORK\projects` 并初始化为 git 仓库；项目模板 `project.md` 写受众、观众看完应理解什么、篇幅与页数、风格、验收标准。
 - 提供 `npm run new-project <名称>` 生成模板。
 - 试运行主题：这套方案为了解决什么问题、什么场景适合使用。
 - 用现有单 Agent 流程做一份 PPT，在 `baseline.md` 记录总用时、你的修改时间、发现的实质错误数。
@@ -463,7 +473,7 @@ SSE 新增事件：`record`、`task`、`verification`、`objection`、`commit`�
 
 | 字段 | 含义 | 默认值 |
 | --- | --- | --- |
-| `projectsDir` | 项目资料目录 | ``WETALK-WORK\projects` |
+| `projectsDir` | 项目资料目录 | `WETALK-WORK\projects` |
 | `modes` | 任务类型对应的工作方式 | 搜集资料、抽取论断、检查引用用分工；选题角度、大纲、核心解释用竞争；核心结论、因果解释、重要数字用对抗核验 |
 | `compete.drafts` | 竞争方案份数 | 2 |
 | `verify.coreClaimVerifiers` | 核心结论需要的独立核验份数 | 2（其他论断 1 份） |
@@ -517,7 +527,7 @@ SSE 新增事件：`record`、`task`、`verification`、`objection`、`commit`�
 
 | 问题 | 决定 |
 | --- | --- |
-| 项目资料位置 | ``WETALK-WORK\projects`，整个目录是一个 git 仓库 |
+| 项目资料位置 | `WETALK-WORK\projects`，整个目录是一个 git 仓库 |
 | 运行依赖 | 工坊仓库允许引入，例如 PPT 导出；WETALK 继续保持零依赖 |
 | 试运行主题 | 这套方案为了解决什么问题、什么场景适合使用 |
 | PPT 导出 | Markdown 与 PPTX 两种导出脚本；可指定 Agent 负责导出；可用模板文件或 skill 控制版式 |
@@ -531,8 +541,8 @@ SSE 新增事件：`record`、`task`、`verification`、`objection`、`commit`�
 
 **待定：**
 
-- [ ] 试运行 PPT 的目标观众，写进 project.md（WP1）
-- [ ] 本机是否装有 PowerPoint：决定渲染检查用 PowerPoint 还是 LibreOffice（WP7）
+- [x] 试运行 PPT 的目标观众，写进 project.md（WP1）：已由主持人填写
+- [ ] 渲染检查用 PowerPoint 还是 LibreOffice（WP7）：已确认本机装有 PowerPoint、没有 LibreOffice；脚本能否可靠地自动化 PowerPoint 导出与渲染，在 WP7 实测后关闭
 - [ ] Codex 的 JSON 事件输出能否可靠地审计执行过的命令，在 WP4 开始前实测
 
 ## 参考

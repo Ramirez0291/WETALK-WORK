@@ -38,7 +38,7 @@ test('new project gets template files, fixed subdirectories and a creation event
   assert.doesNotMatch(project.conventions, /\{\{\w+\}\}/);
   const events = fs.readFileSync(path.join(project.dir, 'events.jsonl'), 'utf8').trim().split('\n').map(JSON.parse);
   assert.equal(events[0].type, 'project_created');
-  assert.ok(archive.ok, archive.error);
+  assert.equal(archive.state, 'done', archive.error);
   // 没有留下临时目录
   assert.deepEqual(fs.readdirSync(dir).filter((n) => n.startsWith('_staging-')), []);
 });
@@ -119,7 +119,7 @@ test('unknown keys and global-only keys are rejected; notes keys are ignored', (
   assert.throws(() => resolveConfig(DEFAULTS, { lease: { minute: 5 } }), /未知参数 lease.minute/);
   assert.throws(() => resolveConfig(DEFAULTS, { projectsDir: 'elsewhere' }), /只能在全局设置/);
   assert.throws(() => resolveConfig(DEFAULTS, { slides: 100 }), /必须是对象/);
-  assert.throws(() => resolveConfig(DEFAULTS, { export: { formats: 'md' } }), /类型应为 array/);
+  assert.throws(() => resolveConfig(DEFAULTS, { export: { formats: 'md' } }), /export.formats 必须是数组/);
   assert.equal(resolveConfig(DEFAULTS, { _comment: 'x', export: { template: 'templates/a.pptx' } }).export.template, 'templates/a.pptx');
   assert.throws(() => resolveConfig(DEFAULTS, []), { status: 400 });
 });
@@ -162,4 +162,83 @@ test('rename retries while the target is briefly locked, but gives up on other e
     throw Object.assign(new Error('locked'), { code: 'EPERM' });
   };
   await assert.rejects(renameRetry('a', 'b', { rename: alwaysBusy, attempts: 3, delayMs: 1 }), { code: 'EPERM' });
+});
+
+// ---------- WP1 评审修复（R1–R3）的回归用例 ----------
+
+test('R1: project paths are literal, so a bracketed name never sweeps in another project', { skip: !gitAvailable && 'git 不可用' }, async () => {
+  const dir = tmpProjects();
+  const wb = createWorkbench({ projectsDir: dir, defaults: DEFAULTS, templateDir: TEMPLATES });
+  await wb.init();
+  await wb.create('文稿a');
+  fs.appendFileSync(path.join(dir, '文稿a', 'project.md'), '\n主持人还没准备好的修改\n');
+  const { archive } = await wb.create('文稿[ab]');
+  assert.equal(archive.state, 'done');
+  const files = (await git(dir, ['show', '--name-only', '--format=', 'HEAD'])).stdout.trim().split('\n').sort();
+  assert.deepEqual(files, ['文稿[ab]/baseline.md', '文稿[ab]/project.md', '文稿[ab]/protocol.json']);
+  // 另一个项目的修改既没被提交，也没被暂存
+  assert.equal((await git(dir, ['diff', '--cached', '--name-only'])).stdout.trim(), '');
+  assert.equal((await git(dir, ['diff', '--name-only'])).stdout.trim(), '文稿a/project.md');
+});
+
+function templatesWith(protocol) {
+  const base = fs.mkdtempSync(path.join(os.tmpdir(), 'wb-tpl-'));
+  created.push(base);
+  fs.cpSync(TEMPLATES, base, { recursive: true });
+  fs.writeFileSync(path.join(base, 'protocol.json'), JSON.stringify(protocol));
+  return base;
+}
+
+test('R2: whether a new project is archived follows its own effective config, in both directions', { skip: !gitAvailable && 'git 不可用' }, async () => {
+  const head = async (dir) => (await git(dir, ['rev-parse', 'HEAD'])).stdout.trim();
+
+  const off = tmpProjects();
+  const wbOff = createWorkbench({ projectsDir: off, defaults: DEFAULTS, templateDir: templatesWith({ git: { autoCommit: false } }) });
+  await wbOff.init();
+  const before = await head(off);
+  const made = await wbOff.create('不留档');
+  assert.equal(made.project.config.git.autoCommit, false);
+  assert.deepEqual(made.archive, { state: 'disabled', error: null });
+  assert.equal(await head(off), before);
+
+  const on = tmpProjects();
+  const globalOff = { ...DEFAULTS, git: { autoCommit: false } };
+  const wbOn = createWorkbench({ projectsDir: on, defaults: globalOff, templateDir: templatesWith({ git: { autoCommit: true } }) });
+  await wbOn.init();
+  const beforeOn = await head(on);
+  const madeOn = await wbOn.create('要留档');
+  assert.equal(madeOn.archive.state, 'done');
+  assert.notEqual(await head(on), beforeOn);
+});
+
+test('R3: null is only accepted where a field is nullable, and open maps still validate values', () => {
+  const bad = [
+    [{ git: { autoCommit: null } }, /git.autoCommit 必须是 true 或 false/],
+    [{ export: { formats: null } }, /export.formats 必须是数组/],
+    [{ export: { formats: [] } }, /export.formats 至少要有 1 项/],
+    [{ export: { formats: ['pdf'] } }, /export.formats 第 1 项只能是 md \/ pptx/],
+    [{ modes: { custom: 42 } }, /modes.custom 只能是 divide/],
+    [{ modes: { outline: 'vote' } }, /modes.outline 只能是 divide/],
+    [{ routing: { custom: 'claude' } }, /routing.custom 必须是数组/],
+    [{ routing: { custom: [] } }, /routing.custom 至少要有 1 项/],
+    [{ routing: { custom: [''] } }, /routing.custom 第 1 项必须是非空字符串/],
+    [{ modes: [] }, /modes 必须是对象/],
+    [{ rounds: 0 }, /rounds 必须是不小于 1 的整数/],
+    [{ rounds: 'many' }, /rounds 必须是不小于 1 的整数/],
+    [{ export: { template: 3 } }, /export.template 必须是非空字符串/],
+    [{ compete: { drafts: 1 } }, /compete.drafts 必须是不小于 2 的整数/],
+    [{ render: { engine: 'keynote' } }, /render.engine 只能是/],
+    [{ memory: { loadByDefault: ['everything'] } }, /memory.loadByDefault 第 1 项只能是/],
+    [{ retry: { delaysSec: [2, -1] } }, /retry.delaysSec 第 2 项必须是不小于 0/],
+  ];
+  for (const [o, msg] of bad) assert.throws(() => resolveConfig(DEFAULTS, o), msg, JSON.stringify(o));
+  const ok = resolveConfig(DEFAULTS, { rounds: 4, export: { template: 'templates/pptx/a.pptx', skill: null }, modes: { glossary: 'divide' }, routing: { glossary: ['deepseek'] } });
+  assert.equal(ok.rounds, 4);
+  assert.deepEqual(ok.routing.glossary, ['deepseek']);
+});
+
+test('every parameter in the shipped defaults has an explicit value constraint', () => {
+  // 默认值里新增参数却忘了写约束时，resolveConfig 会报 500，这里提前发现
+  const extra = { ...DEFAULTS, brandNew: { knob: 1 } };
+  assert.throws(() => resolveConfig(extra, {}), /参数 brandNew.knob 没有定义取值约束/);
 });

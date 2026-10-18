@@ -52,7 +52,8 @@ try {
   const r = (await viaServer(serverPort())) ?? (await locally());
   console.log(`已新建项目「${r.name}」（${r.via}）`);
   if (r.dir) console.log(`目录：${r.dir}`);
-  console.log(r.archive?.ok ? 'git 留档：完成' : `git 留档：失败，稍后重试（${r.archive?.error}）`);
+  const archive = { done: 'git 留档：完成', disabled: 'git 留档：本项目已关闭自动留档（git.autoCommit = false）' };
+  console.log(archive[r.archive?.state] ?? `git 留档：失败（${r.archive?.error}）`);
   console.log('下一步：填写 project.md 里的受众、观众应理解什么、篇幅、风格和验收标准。');
 } catch (e) {
   console.error(`新建失败：${e.message}`);
