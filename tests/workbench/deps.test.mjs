@@ -6,9 +6,11 @@ import { validateData } from '../../lib/workbench/records.mjs';
 
 const recs = (...list) => new Map(list.map((r) => [r.id, r]));
 const S = (id, version, extra = {}) => ({ id, version, title: id, url: 'https://example.org', availability: 'available', ...extra });
-const C = (id, version, sources, extra = {}) => ({ id, version, type: 'fact', text: id, sources, ...extra });
+// 论断的作者与核验者都带服务端认定的身份：作者是 DeepSeek，每份核验来自不同的、另一厂商的核验者
+const AUTHOR = { kind: 'server', participant: 'deepseek', vendor: 'deepseek', verified: true };
+const C = (id, version, sources, extra = {}) => ({ id, version, type: 'fact', text: id, sources, provenance: AUTHOR, ...extra });
 const SL = (id, version, claims) => ({ id, version, title: id, claims });
-const V = (id, target, sourceVersions, verdict) => ({ id, version: 1, target, source_versions: sourceVersions, verdict });
+const V = (id, target, sourceVersions, verdict, verifier = { kind: 'server', participant: `checker-${id}`, vendor: 'anthropic', verified: true }) => ({ id, version: 1, target, source_versions: sourceVersions, verdict, verifier });
 const O = (id, target, category, state) => ({ id, version: 1, target, category, state });
 
 test('stale propagates through several levels: source update → claim → slide', () => {

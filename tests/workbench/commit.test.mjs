@@ -202,7 +202,7 @@ test('身份不从请求体里取：没有任务号又不是主持人入口的�
   assert.throws(() => env.gw.receive(P, { ...body, task_id: 'T001', attempt: 1, lease_token: 'x' }), { status: 404 });
 });
 
-test('记录字段校验：系统字段、未知字段、缺最早出处、核验与异议（WP5 之前）都被拒绝', async () => {
+test('记录字段校验：系统字段、未知字段、缺最早出处、核验与异议的格式错误都被拒绝', async () => {
   const env = await setup();
   const bad = [
     [{ kind: 'source', expected_version: 0, data: { title: 'x', url: 'https://a', version: 3 } }, /version 由提交入口填写/],
@@ -212,8 +212,9 @@ test('记录字段校验：系统字段、未知字段、缺最早出处、核�
     [{ kind: 'claim', expected_version: 0, data: { type: 'textual', text: 'x', sources: [] } }, /earliest_attestation/],
     [{ kind: 'claim', expected_version: 0, data: { type: 'fact', text: 'x', sources: [{ id: 'S001' }] } }, /version 必须是正整数/],
     [{ kind: 'claim', expected_version: 0, data: { type: 'fact', text: 'x', status: 'supported' } }, /未知字段 status/],
-    [{ kind: 'verification', expected_version: 0, data: {} }, /WP5/],
-    [{ kind: 'objection', expected_version: 0, data: {} }, /WP5/],
+    [{ kind: 'verification', expected_version: 0, data: { target: { id: 'C001', version: 1 }, source_versions: [], verdict: 'supported', reason: '有' } }, /support_quote/],
+    [{ kind: 'objection', expected_version: 0, data: { target: { id: '$c1', version: 1 }, category: 'number_error', pointer: { type: 'location', locator: 'x' }, reason: 'r', state: 'open' } }, /临时编号/],
+    [{ kind: 'verification', expected_version: 0, data: { target: { id: 'C001', version: 1 }, source_versions: [], verdict: 'unsupported', reason: 'r', verifier: {} } }, /verifier 由提交入口填写/],
     [{ kind: 'source', expected_version: 1, data: { title: 'x', url: 'https://a' } }, /新建记录不写 id/],
     [{ id: 'S001', expected_version: 0, data: { title: 'x', url: 'https://a' } }, /新建记录不写 id/],
     [{ id: 'C001', kind: 'source', expected_version: 1, data: {} }, /kind 与编号/],

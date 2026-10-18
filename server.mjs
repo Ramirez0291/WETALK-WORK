@@ -13,6 +13,7 @@ import { createWebTools } from './lib/workbench/web.mjs';
 import { createTaskBoard } from './lib/workbench/tasks.mjs';
 import { createRunner } from './lib/workbench/runner.mjs';
 import { createSealedStore } from './lib/workbench/visibility.mjs';
+import { createEvidenceFlow } from './lib/workbench/evidence.mjs';
 import { RULES, tally, decideOutcome, buildVotePrompt, parseVote, buildDraftPrompt, parseDraft, resultText } from './lib/voting.mjs';
 import { createWorkbench, loadDefaults } from './lib/workbench/project.mjs';
 import { workbenchRoutes } from './lib/workbench/http.mjs';
@@ -43,7 +44,12 @@ const deepseek = createDeepseekClient({
 const usage = createUsage({ workbench, pricing: WB_DEFAULTS.pricing });
 // SSE 客户端：必须在任何可能广播的代码（启动时的任务恢复会发事件）之前建好
 const clients = new Set();
-const wbEvent = (ev) => broadcast({ ...ev, type: `wb-${ev.type}` }); // 工坊事件里从不带正文
+// 契约一的规则（补证任务、来源 gone 时的异议）：提交完成、补证任务结束时触发一次。flow 在下面建好后才接上
+let flow = null;
+const wbEvent = (ev) => {
+  broadcast({ ...ev, type: `wb-${ev.type}` }); // 工坊事件里从不带正文
+  if (ev.type === 'commit' || (ev.type === 'task' && ['done', 'failed', 'cancelled'].includes(ev.state))) flow?.poke(ev.project);
+};
 // 任务看板（契约三）：任务状态只由它改变；它同时是提交入口的栅栏
 const board = createTaskBoard({ workbench, usage, onEvent: wbEvent });
 // 提交入口：启动时取得项目目录的单实例锁并做崩溃恢复，之后它是正式区唯一的写入者
@@ -53,6 +59,8 @@ const gateway = createCommitGateway({
   fence: board.fence,
   onEvent: wbEvent,
   availabilityOf: (p, urlOf) => usage.availabilityOf(p, { urlOf }),
+  // 异议的 fetch_failure 指针：用量账本里这次针对该来源的抓取确实失败了
+  fetchFailed: (p, sourceId, attemptId) => usage.entries(p).some((e) => e.id === attemptId && e.api === 'fetch' && e.source_id === sourceId && e.settled && e.ok === false),
 });
 const web = createWebTools({ client: deepseek, usage, gateway, workbench, timeoutMs: WB_DEFAULTS.deepseek.timeoutSec * 1000 });
 let workbenchStart;
@@ -86,6 +94,8 @@ for (const { name } of workbench.list()) {
     else gateway.promote(name, sid).catch(() => {}); // 成败由提交入口回调任务状态
   }
 }
+flow = createEvidenceFlow({ workbench, gateway, board, availabilityOf: (p, urlOf) => usage.availabilityOf(p, { urlOf }) });
+for (const { name } of workbench.list()) flow.poke(name); // 启动时补做停机期间没来得及做的
 // 租约到期的检查：读接口时会顺带清理，这里再定时扫一遍
 setInterval(() => {
   for (const { name } of workbench.list()) board.sweep(name);
@@ -1187,8 +1197,9 @@ const routes = [
   }],
 
   ...workbenchRoutes({
-    workbench, gateway, web, usage, board, runner, sealed, readJson, hostToken: HOST_TOKEN, humanName: config.humanName,
+    workbench, gateway, web, usage, board, runner, sealed, flow, readJson, hostToken: HOST_TOKEN, humanName: config.humanName,
     participantByName: (name) => findParticipant(name),
+    participants: () => participants,
   }),
 ];
 

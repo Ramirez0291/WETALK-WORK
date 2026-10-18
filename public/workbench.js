@@ -86,6 +86,9 @@ async function render() {
     $('#inboxCount').hidden = !inbox.length;
     $('#inboxCount').textContent = inbox.length;
     await VIEWS[tab]?.(inbox);
+    // 打开着的记录详情（例如核验结果陆续回来）一起刷新；正在填表单时不刷，免得冲掉输入
+    const box = $('#recordDetail');
+    if (tab === 'records' && openRecord && !box.hidden && !box.contains(document.activeElement) && !box.querySelector('details[open]')) await showRecord(openRecord, { scroll: false });
   } catch (e) {
     fail(e);
   }
@@ -93,7 +96,28 @@ async function render() {
 
 const fresh = (s) => (s.freshness === 'stale' ? badge('待更新', 'b-warn') : badge('最新', 'b-ok'));
 const ready = (s) => (s.ready === undefined ? '' : s.ready ? badge('可进入成品', 'b-ok') : badge('不可进入成品', 'b-muted'));
-const verif = (s) => (s.verification ? badge(...VER[s.verification.state]) : '');
+// 核验状态带份数：支持且份数够才算数（核心结论默认 2 份，其他 1 份）
+const verif = (s) => {
+  const v = s.verification;
+  if (!v) return '';
+  const [text, cls] = VER[v.state];
+  return badge(v.state === 'supported' ? `${text} ${v.independent}/${v.required}` : text, v.state === 'supported' && !v.enough ? 'b-warn' : cls);
+};
+const UNCOUNTED = {
+  same_vendor: '与作者同厂商', identity_unverified: '身份未证实（MCP 外部会话）', vendor_unknown: '推断不出核验者的厂商',
+  author_vendor_unknown: '推断不出作者的厂商', superseded: '同一核验者后来又核验了一次，只算最新一份',
+};
+const O_STATE = {
+  open: ['待裁定', 'b-bad'], needs_evidence: ['待补证', 'b-bad'], upheld: ['成立', 'b-bad'], needs_user: ['待你决定', 'b-bad'],
+  rejected: ['不成立', 'b-muted'], withdrawn: ['已撤回', 'b-muted'], resolved: ['已解决', 'b-ok'],
+};
+const O_CATEGORY = {
+  source_missing: '来源不存在（阻塞）', number_error: '数字错误（阻塞）', quote_unsupported: '引文不支持结论（阻塞）',
+  interpretation: '解释争议', narrative: '叙事选择', extension: '可选扩展',
+};
+// 主持人在页面上能把异议转到的状态（最终由提交入口的状态机按身份判断）
+const O_NEXT = { open: ['upheld', 'rejected', 'needs_user', 'withdrawn'], needs_evidence: ['needs_user', 'withdrawn'], upheld: ['resolved'], needs_user: ['upheld', 'rejected', 'open', 'withdrawn', 'resolved'] };
+const who = (a) => (a ? `${a.participant ?? a.kind}${a.vendor && a.vendor !== 'human' ? `（${a.vendor}）` : ''}${a.verified ? '' : ' · 未证实'}` : '');
 const blocks = (s) => (s.blockers.length ? badge(`阻塞 ${s.blockers.join('、')}`, 'b-bad') : '');
 const titleOf = (r) => r.title ?? r.text ?? r.target?.id ?? '';
 
@@ -130,6 +154,7 @@ const VIEWS = {
   },
 
   async records() {
+    if (!people.length) people = (await api('GET', '/api/state')).participants.filter((x) => x.available);
     const kind = $('#kindFilter').value;
     const list = await api('GET', P(`/records${kind ? `?kind=${kind}` : ''}`));
     $('#recordList').innerHTML = list.length
@@ -181,7 +206,7 @@ const VIEWS = {
   async tasks() {
     const [list, o, state] = await Promise.all([api('GET', P('/tasks')), api('GET', P()), api('GET', '/api/state')]);
     people = state.participants.filter((x) => x.available);
-    const types = [...Object.keys(o.config.modes), 'anonymous_review', 'audience_reader'];
+    const types = [...Object.keys(o.config.modes), 'verify_claim', 'find_evidence', 'anonymous_review', 'audience_reader'];
     const sel = $('#taskType');
     if (sel.options.length !== types.length) sel.innerHTML = types.map((t) => `<option value="${esc(t)}">${esc(t)}（${esc(o.config.modes[t] ?? '特殊')}）</option>`).join('');
     const opts = people.map((x) => `<option value="${esc(x.id)}">${esc(x.name)}</option>`).join('');
@@ -220,19 +245,29 @@ const VIEWS = {
     const label = {
       write_fault: '写入故障：已停止接受写入，请重启服务完成恢复', external_change: '服务进程之外改过的记录文件', bad_record_file: '读不出来的记录文件', archive_failed: 'git 留档失败',
       task_failed: '任务失败（尝试次数用完，不再自动重派）', task_needs_user: '任务待你决定', budget_exceeded: '项目用量已到上限',
+      objection_needs_user: '异议待你裁决', claim_disputed: '论断的核验结论不一致',
     };
+    const where = (i) => (i.objection || i.claim ? `<a href="#" data-goto="${esc(i.objection ?? i.claim)}"><code>${esc(i.objection ?? i.claim)}</code></a>` : `<code>${esc(i.path ?? i.cid ?? i.task ?? '')}</code>`);
     $('#inboxList').innerHTML = items.length
       ? `<div class="wrap"><table><tr><th>类型</th><th>位置</th><th>说明</th></tr>
-        ${items.map((i) => `<tr><td>${esc(label[i.type] ?? i.type)}</td><td><code>${esc(i.path ?? i.cid)}</code></td>
-          <td class="hint">${esc(i.reason ?? i.error ?? (i.actual ? '内容与最后一次提交不一致' : i.expected ? '文件被删除' : i.type?.startsWith('task_') ? '' : '没有对应的提交记录'))}</td></tr>`).join('')}</table></div>
-        <p class="hint">外部改动不会被提交入口覆盖：涉及这些文件的晋升会被拒绝，直到处理完。处理入口在 WP4 加入。</p>`
+        ${items.map((i) => `<tr><td>${esc(label[i.type] ?? i.type)}</td><td>${where(i)}</td>
+          <td class="hint">${esc(i.reason ?? i.error ?? i.resolution ?? (i.type === 'claim_disputed' ? `计入的核验：${i.counted.join('、')}` : i.actual ? '内容与最后一次提交不一致' : i.expected ? '文件被删除' : i.type?.startsWith('task_') || i.type?.startsWith('objection') ? '' : '没有对应的提交记录'))}</td></tr>`).join('')}</table></div>
+        <p class="hint">外部改动不会被提交入口覆盖：涉及这些文件的晋升会被拒绝，直到处理完。点编号打开记录详情，在那里处理异议。</p>
+        <div id="inboxDetail"></div>`
       : '<p class="hint">没有待你决定的事项。</p>';
+    for (const a of document.querySelectorAll('#inboxList [data-goto]')) a.onclick = (e) => {
+      e.preventDefault();
+      document.querySelector('#tabs [data-tab="records"]').click();
+      setTimeout(() => showRecord(a.dataset.goto).catch(fail), 100);
+    };
   },
 };
 
 $('#kindFilter').onchange = () => VIEWS.records();
 
-async function showRecord(id) {
+let openRecord = null; // 记录标签页里打开着的详情：实时事件到来时一起刷新
+async function showRecord(id, { scroll = true } = {}) {
+  openRecord = id;
   const r = await api('GET', P(`/records/${id}`));
   const s = r.status;
   const link = (x) => `<a href="#" data-goto="${x}"><code>${x}</code></a>`;
@@ -243,14 +278,108 @@ async function showRecord(id) {
     <div>${fresh(s)} ${verif(s)} ${blocks(s)} ${ready(s)}</div>
     ${s.stale_reasons.length ? `<p class="hint">待更新原因：${s.stale_reasons.map((x) => x.type === 'version' ? `${x.id} 已从 v${x.based} 更新到 v${x.current}` : x.type === 'upstream' ? `上游 ${x.id} 待更新` : x.type === 'missing' ? `${x.id} 不存在` : x.type === 'external' ? `正式文件在服务之外被${x.change === 'deleted' ? '删除' : '改动'}，这里显示的是已提交的内容` : '循环引用').join('；')}</p>` : ''}
     <p>上游：${s.based_on.map((b) => `${link(b.id)} v${b.version}`).join('、') || '无'}　下游：${s.downstream.map(link).join('、') || '无'}</p>
-    ${r.verifications.length ? `<p>核验记录：${r.verifications.map(link).join('、')}</p>` : ''}
-    ${r.objections.length ? `<p>异议：${r.objections.map(link).join('、')}</p>` : ''}
+    ${r.kind === 'claim' ? claimPanel(r, link) : ''}
+    ${r.kind === 'objection' ? objectionPanel(r.record) : ''}
+    ${r.kind === 'verification' ? `<p>核验者：${esc(who(r.record.verifier))} · 结论：${badge(...VER[r.record.verdict])}</p><p>${esc(r.record.reason)}</p>${r.record.support_quote ? `<div class="quote">${esc(r.record.support_quote.id)}@${r.record.support_quote.version}：${esc(r.record.support_quote.quote)}</div>` : ''}` : ''}
+    ${r.kind !== 'claim' && r.objections.length ? `<p>异议：${r.objections.map(link).join('、')}</p>` : ''}
+    ${r.kind !== 'claim' && r.kind !== 'objection' ? objectionForm(r) : ''}
     <p><button data-trace="${id}">追溯</button></p>
     <pre>${esc(JSON.stringify(r.record, null, 2))}</pre>
     <h4>历史版本</h4>
     <ul>${r.history.map((h) => `<li>v${h.version} · 提交 ${esc(h.commit ?? '-')} · ${time(h.updated_at)} · ${esc(h.provenance?.participant ?? h.provenance?.kind ?? '')}</li>`).join('')}</ul>`;
   bindLinks(box);
-  box.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+  bindContract1(box, r);
+  if (scroll) box.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+}
+
+// ---------- 契约一：论断的核验面板、异议面板与表单 ----------
+
+function claimPanel(r, link) {
+  const v = r.status.verification;
+  const c = r.record;
+  const sources = (c.sources || []).map((x) => `<option value="${esc(x.id)}@${x.version}">${esc(x.id)} v${x.version}</option>`).join('');
+  return `<div class="panel">
+    <h4>核验 ${c.core ? badge('核心结论', 'b-warn') : ''}</h4>
+    <p>结论：${verif(r.status)} · 独立核验者 ${v.independent} / 需要 ${v.required}${v.enough ? '' : '（还不够，不能进入成品）'}</p>
+    <p>计入：${v.counted.map(link).join('、') || '无'}</p>
+    ${v.uncounted.length ? `<p class="hint">不计入：${v.uncounted.map((u) => `${link(u.id)}（${esc(UNCOUNTED[u.reason] ?? u.reason)}）`).join('；')}</p>` : ''}
+    ${r.verifications.length > v.counted.length + v.uncounted.length ? `<p class="hint">绑定旧版本、已不计入的核验：${r.verifications.filter((x) => !v.counted.includes(x) && !v.uncounted.some((u) => u.id === x)).map(link).join('、')}</p>` : ''}
+    <p class="hint">作者：${esc(who(c.provenance))}。核验者必须与作者分属不同厂商；同一核验者只算最新一份。</p>
+    <p><select id="c1Who"><option value="">自动挑选（凑够还差的份数）</option>${people.map((x) => `<option value="${esc(x.id)}">${esc(x.name)}</option>`).join('')}</select>
+      <button class="primary" data-verify="${c.id}">派对抗核验</button></p>
+    <details><summary>我来核验</summary>
+      <p><select id="c1Verdict"><option value="supported">支持</option><option value="unsupported">不支持（含证据不足）</option></select></p>
+      <p><textarea id="c1Reason" rows="2" placeholder="理由"></textarea></p>
+      <p>支持引文（判支持时必填）：<select id="c1Src">${sources}</select> <input id="c1Quote" placeholder="来源正文里逐字出现的一段" size="50"></p>
+      <p><button data-myverify="${c.id}@${c.version}">提交核验</button></p>
+    </details>
+    <h4>异议 ${r.status.blockers.length ? badge(`阻塞 ${r.status.blockers.length}`, 'b-bad') : ''}</h4>
+    <p>${r.objections.map(link).join('、') || '无'}</p>
+    ${objectionForm(r)}
+  </div>`;
+}
+
+function objectionForm(r) {
+  const c = r.record;
+  const sources = (r.kind === 'claim' ? c.sources || [] : r.kind === 'source' ? [{ id: c.id, version: c.version }] : []).map((x) => `<option value="${esc(x.id)}@${x.version}">${esc(x.id)} v${x.version}</option>`).join('');
+  return `<details><summary>提出异议</summary>
+    <p><select id="oCat">${Object.entries(O_CATEGORY).map(([k, l]) => `<option value="${k}">${esc(l)}</option>`).join('')}</select>
+      <select id="oState"><option value="open">指针有效（open）</option><option value="needs_evidence">定位不到原文（needs_evidence）</option></select></p>
+    <p>指针：<select id="oPtr"><option value="quote">来源原文</option><option value="missing_source">论断没有来源</option><option value="location">只写位置</option></select>
+      <select id="oSrc">${sources}</select> <input id="oText" placeholder="原文（逐字）或位置描述" size="40"></p>
+    <p><textarea id="oReason" rows="2" placeholder="问题在哪里（不需要给出修改方法）"></textarea></p>
+    <p><button data-object="${c.id}@${c.version}">提出</button></p>
+  </details>`;
+}
+
+function objectionPanel(o) {
+  const ptr = o.pointer.type === 'quote' ? `${o.pointer.source.id}@${o.pointer.source.version}：${o.pointer.quote}` : o.pointer.type === 'location' ? `位置：${o.pointer.locator}` : o.pointer.type === 'gone' ? `来源 ${o.pointer.source.id} 已确认不存在` : o.pointer.type === 'fetch_failure' ? `来源 ${o.pointer.source.id} 的失败抓取 ${o.pointer.attempt}` : '论断没有来源';
+  const next = O_NEXT[o.state] ?? [];
+  return `<div class="panel">
+    <p>${badge(...O_STATE[o.state])} ${esc(O_CATEGORY[o.category])} · 针对 <a href="#" data-goto="${o.target.id}"><code>${o.target.id}</code></a> v${o.target.version}</p>
+    <p>提出者：${esc(who(o.raised_by))}</p>
+    <div class="quote">${esc(ptr)}</div>
+    <p>${esc(o.reason)}</p>
+    ${o.resolution ? `<p class="hint">处理说明：${esc(o.resolution)}</p>` : ''}
+    ${next.length ? `<p><select id="oNext">${next.map((x) => `<option value="${x}">${esc(O_STATE[x][0])}</option>`).join('')}</select>
+      <input id="oResolution" placeholder="理由（成立、不成立、待你决定、已解决都要写）" size="40">
+      <button class="primary" data-resolve="${o.id}">改变状态</button></p>
+      <p class="hint">裁定成立或不成立：主持人可以作为核验者裁定（不能是提出者或作者）；待你决定的只有主持人能裁决；已解决要求目标已改版并重新核验通过。</p>` : ''}
+  </div>`;
+}
+
+function bindContract1(box, r) {
+  const done = (msg) => (x) => {
+    toast(msg(x));
+    showRecord(r.record.id).catch(fail);
+  };
+  const ref = (s) => {
+    const [id, v] = s.split('@');
+    return { id, version: Number(v) };
+  };
+  for (const b of box.querySelectorAll('[data-verify]')) b.onclick = () => {
+    const pid = $('#c1Who').value;
+    api('POST', P(`/claims/${b.dataset.verify}/verify`), pid ? { participants: [pid] } : {})
+      .then(done((x) => `已派发：${x.dispatched.map((d) => `${d.task.id}（${d.task.assigned_to}）`).join('、')}`)).catch(fail);
+  };
+  for (const b of box.querySelectorAll('[data-myverify]')) b.onclick = () => {
+    const verdict = $('#c1Verdict').value;
+    const body = { target: ref(b.dataset.myverify), verdict, reason: $('#c1Reason').value };
+    if (verdict === 'supported') body.support_quote = { ...ref($('#c1Src').value), quote: $('#c1Quote').value };
+    api('POST', P('/verifications'), body).then(done((x) => `已写入核验 ${x.result.records[0].id}`)).catch(fail);
+  };
+  for (const b of box.querySelectorAll('[data-object]')) b.onclick = () => {
+    const type = $('#oPtr').value;
+    const text = $('#oText').value;
+    const pointer = type === 'quote' ? { type, source: ref($('#oSrc').value), quote: text } : type === 'location' ? { type, locator: text } : { type };
+    api('POST', P('/objections'), { target: ref(b.dataset.object), category: $('#oCat').value, state: $('#oState').value, pointer, reason: $('#oReason').value })
+      .then(done((x) => `已提出异议 ${x.result.records[0].id}`)).catch(fail);
+  };
+  for (const b of box.querySelectorAll('[data-resolve]')) b.onclick = () => {
+    const resolution = $('#oResolution').value.trim();
+    api('POST', P(`/objections/${b.dataset.resolve}/resolve`), { state: $('#oNext').value, ...(resolution ? { resolution } : {}) })
+      .then(done(() => `异议 ${b.dataset.resolve} 已更新`)).catch(fail);
+  };
 }
 
 function bindLinks(root) {

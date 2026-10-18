@@ -32,7 +32,8 @@ async function api(method, path, body) {
     throw new Error(`连不上 WeTalk 服务器（${BASE}）。请先在项目目录运行 npm start。`);
   }
   const data = await res.json();
-  if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+  // 晋升被规则拒绝时，把逐条原因一起交给 Agent（例如核验者与作者同厂商、引文找不到）
+  if (!res.ok) throw new Error(`${data.error || `HTTP ${res.status}`}${data.details?.reasons ? `\n原因：${JSON.stringify(data.details.reasons)}` : ''}`);
   return data;
 }
 
@@ -205,6 +206,47 @@ const tools = [
     inputSchema: { type: 'object', properties: { project: { type: 'string' }, id: { type: 'string' } }, required: ['project', 'id'] },
     async run({ project, id }) {
       return JSON.stringify(await api('GET', `/api/projects/${encodeURIComponent(project)}/trace/${id}`), null, 2);
+    },
+  },
+  {
+    name: 'wetalk_verification_create',
+    description: `以「${AGENT}」的身份写一份核验记录（契约一）。只根据来源正文判断；判 supported 必须附 support_quote（来源里逐字出现的原文）。外部会话的身份无法证实，这份核验会保存，但不计入论断的核验份数；与论断作者同厂商的核验会被拒绝。`,
+    inputSchema: {
+      type: 'object',
+      properties: {
+        project: { type: 'string' },
+        target: { type: 'object', description: '{ id: "C001", version: 1 }，论断的当前版本' },
+        verdict: { type: 'string', enum: ['supported', 'unsupported'] },
+        reason: { type: 'string' },
+        support_quote: { type: 'object', description: '{ id: "S001", version: 1, quote: "逐字原文", locator?: "位置" }，supported 时必填' },
+        request_id: { type: 'string', description: '可选，8–100 位；重试时保持不变' },
+      },
+      required: ['project', 'target', 'verdict', 'reason'],
+    },
+    async run({ project, ...body }) {
+      const r = await api('POST', `/api/projects/${encodeURIComponent(project)}/verifications`, { ...body, agent: AGENT });
+      return `已写入核验 ${r.result.records.map((x) => x.id).join('、')}（提交 ${r.result.cid}）。`;
+    },
+  },
+  {
+    name: 'wetalk_objection_create',
+    description: `以「${AGENT}」的身份提出异议（契约一）。阻塞类：source_missing（来源不存在）、number_error（数字错误）、quote_unsupported（引文不支持结论），state 为 open 时必须带能核对的指针（quote：来源里逐字出现的原文；fetch_failure：失败抓取的记录号；missing_source：论断没有来源）；发现问题但定位不到原文时 state 写 needs_evidence，pointer 用 { type: "location", locator }。不阻塞的：interpretation、narrative、extension。`,
+    inputSchema: {
+      type: 'object',
+      properties: {
+        project: { type: 'string' },
+        target: { type: 'object', description: '{ id, version }，目标记录的当前版本' },
+        category: { type: 'string', enum: ['source_missing', 'number_error', 'quote_unsupported', 'interpretation', 'narrative', 'extension'] },
+        pointer: { type: 'object' },
+        reason: { type: 'string', description: '问题在哪里（不需要给出修改方法）' },
+        state: { type: 'string', enum: ['open', 'needs_evidence'] },
+        request_id: { type: 'string' },
+      },
+      required: ['project', 'target', 'category', 'pointer', 'reason'],
+    },
+    async run({ project, ...body }) {
+      const r = await api('POST', `/api/projects/${encodeURIComponent(project)}/objections`, { ...body, agent: AGENT });
+      return `已提出异议 ${r.result.records.map((x) => x.id).join('、')}（提交 ${r.result.cid}）。`;
     },
   },
 ];

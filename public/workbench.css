@@ -95,3 +95,8 @@ mark { background: var(--mark); color: inherit; }
 
 .toast { position: fixed; right: 16px; bottom: 16px; max-width: min(520px, calc(100vw - 32px)); background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 10px 14px; box-shadow: 0 4px 16px rgba(0,0,0,.12); white-space: pre-wrap; }
 .toast.err { border-color: var(--danger); }
+/* 契约一：论断的核验面板、异议面板 */
+.panel { border: 1px solid var(--border); border-radius: 8px; padding: 8px 12px; margin: 10px 0; background: var(--bg); }
+.panel h4 { margin: 8px 0 4px; }
+.panel textarea { width: 100%; box-sizing: border-box; }
+.panel input { max-width: 100%; }
