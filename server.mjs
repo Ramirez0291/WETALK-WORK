@@ -7,7 +7,7 @@ import { createStore } from './lib/store.mjs';
 import { createCallLog } from './lib/calllog.mjs';
 import { rngFrom, normalizeSeed, shuffle, buildQueue } from './lib/schedule.mjs';
 import { runAgent, buildPrompt, parseReply, resolveCommand, listOptions, isCombined, isApiAdapter, MEMORY_MAX_CHARS, CHOICE_LABEL } from './lib/agents.mjs';
-import { createDeepseekClient, chatCost } from './lib/workbench/deepseek.mjs';
+import { createDeepseekClient, createRateLimiter, chatCost } from './lib/workbench/deepseek.mjs';
 import { createUsage } from './lib/workbench/usage.mjs';
 import { createWebTools } from './lib/workbench/web.mjs';
 import { RULES, tally, decideOutcome, buildVotePrompt, parseVote, buildDraftPrompt, parseDraft, resultText } from './lib/voting.mjs';
@@ -31,7 +31,12 @@ const WB_DEFAULTS = loadDefaults(path.join(ROOT, 'workbench.defaults.json'));
 const PROJECTS_DIR = path.resolve(ROOT, process.env.WETALK_PROJECTS || WB_DEFAULTS.projectsDir);
 const workbench = createWorkbench({ projectsDir: PROJECTS_DIR, defaults: WB_DEFAULTS, templateDir: path.join(ROOT, 'templates', 'project') });
 // DeepSeek：对话、Search、Fetch 共用一个客户端；项目用量与来源可获取性记在各项目的账本里
-const deepseek = createDeepseekClient({ baseUrl: process.env.WETALK_DEEPSEEK_URL || WB_DEFAULTS.deepseek.baseUrl, retry: WB_DEFAULTS.retry });
+// Search、Fetch 各自按账户限速（每次物理请求、含重试都要取名额），所有项目共用
+const deepseek = createDeepseekClient({
+  baseUrl: process.env.WETALK_DEEPSEEK_URL || WB_DEFAULTS.deepseek.baseUrl,
+  retry: WB_DEFAULTS.retry,
+  rateLimits: { search: createRateLimiter(WB_DEFAULTS.deepseek.webPerSecond), fetch: createRateLimiter(WB_DEFAULTS.deepseek.webPerSecond) },
+});
 const usage = createUsage({ workbench, pricing: WB_DEFAULTS.pricing });
 // 提交入口：启动时取得项目目录的单实例锁并做崩溃恢复，之后它是正式区唯一的写入者
 const gateway = createCommitGateway({
@@ -40,7 +45,7 @@ const gateway = createCommitGateway({
   onEvent: (ev) => broadcast({ ...ev, type: `wb-${ev.type}` }),
   availabilityOf: (p) => usage.availabilityOf(p),
 });
-const web = createWebTools({ client: deepseek, usage, gateway, workbench, perSecond: WB_DEFAULTS.deepseek.webPerSecond, timeoutMs: WB_DEFAULTS.deepseek.timeoutSec * 1000 });
+const web = createWebTools({ client: deepseek, usage, gateway, workbench, timeoutMs: WB_DEFAULTS.deepseek.timeoutSec * 1000 });
 let workbenchStart;
 try {
   workbenchStart = await gateway.start();

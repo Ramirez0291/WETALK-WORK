@@ -144,9 +144,10 @@ test('费用：按缓存命中、未命中、输出分别计价；高峰与低�
 
 // ---------- 预算与账本 ----------
 
-async function projectEnv(budget) {
+// override：写进项目 protocol.json 的覆盖；测试里默认把重试间隔调成毫秒级
+async function projectEnv(budget, override = {}) {
   const env = await setup();
-  if (budget) fs.writeFileSync(path.join(env.projectsDir, P, 'protocol.json'), JSON.stringify({ budget }));
+  fs.writeFileSync(path.join(env.projectsDir, P, 'protocol.json'), JSON.stringify({ retry: { max: 3, delaysSec: [0.01, 0.02, 0.03] }, ...(budget ? { budget } : {}), ...override }));
   const usage = createUsage({ workbench: env.workbench, pricing: DEFAULTS.pricing, now: () => new Date('2026-10-19T12:00:00Z') });
   // 和 server.mjs 一样把来源可获取性接进提交入口
   const { gw } = await restart(env, { availabilityOf: (p) => usage.availabilityOf(p) });
@@ -158,8 +159,10 @@ test('重试计入项目调用上限：到上限后不再发请求，账本里�
   mock.script('/chat/completions', apiError(429), apiError(429), apiError(429), chatOk());
   await assert.rejects(client().chat({ model: 'deepseek-flash', prompt: 'x' }, env.usage.hooks(P, { purpose: 'test' })), (e) => e.kind === 'budget');
   assert.equal(mock.requests.length, 3);
+  // 每次尝试：发请求前一行 start（占名额），结束后一行 end（结算）
   const lines = fs.readFileSync(path.join(env.projectsDir, P, 'usage.jsonl'), 'utf8').trim().split('\n').map(JSON.parse);
-  assert.deepEqual(lines.map((l) => [l.api, l.status, l.ok]), [['chat', 429, false], ['chat', 429, false], ['chat', 429, false]]);
+  assert.deepEqual(lines.map((l) => l.phase), ['start', 'end', 'start', 'end', 'start', 'end']);
+  assert.deepEqual(env.usage.entries(P).map((l) => [l.api, l.status, l.ok, l.attempt]), [['chat', 429, false, 1], ['chat', 429, false, 2], ['chat', 429, false, 3]]);
   assert.deepEqual(env.usage.totals(P), { calls: 3, usd: 0, limits: { calls: 3, usd: DEFAULTS.budget.apiUsd } });
   // 重新加载账本（模拟重启）后上限依然生效
   const again = createUsage({ workbench: env.workbench, pricing: DEFAULTS.pricing });
@@ -200,8 +203,9 @@ const SEARCH_RESULT = { rerank_score: 2, title: '三五历纪', url: 'https://ex
 const PAGE = { title: '三五历纪（辑佚）', content: '# 三五历纪\n\n天地混沌如鸡子，盘古生其中。万八千岁，天地开辟。' };
 
 async function webEnv(opts = {}) {
-  const env = await projectEnv(opts.budget);
-  const web = createWebTools({ client: client(), usage: env.usage, gateway: env.gw, workbench: env.workbench, timeoutMs: 5000 });
+  const env = await projectEnv(opts.budget, opts.override);
+  const c = opts.client ?? client();
+  const web = createWebTools({ client: c, usage: env.usage, gateway: env.gw, workbench: env.workbench, timeoutMs: opts.timeoutMs ?? 5000 });
   return { ...env, web };
 }
 
@@ -313,4 +317,226 @@ test('引文定位：Fetch 的 Markdown 转义和空白重排不影响定位；�
   assert.equal(locateQuote('天地混沌如鸡子，盘古生其中', '天地混沌如鸡子,盘古生其中'), null); // 全半角不归一
   assert.deepEqual(locateQuote('甲乙丙', '乙'), { index: 1, length: 1 });
   assert.equal(locateQuote('甲乙丙', ''), null);
+});
+
+// ---------- WP3 评审（R1–R6）的回归用例 ----------
+
+const searchOk = () => ({ body: { results: [{ ...SEARCH_RESULT }] } });
+
+test('R1: 调用次数是硬上限：并发的 Search / Fetch 不会一起越过上限，超额的在发出之前就被拦住', async () => {
+  const env = await webEnv({ budget: { calls: 1 } });
+  mock.script('/v1/tools/search', { ...searchOk(), delayMs: 150 }, { ...searchOk(), delayMs: 150 }, { ...searchOk(), delayMs: 150 });
+  mock.script('/v1/tools/fetch', { body: PAGE, delayMs: 150 }, { body: PAGE, delayMs: 150 });
+  const settled = await Promise.allSettled([
+    ...Array.from({ length: 3 }, (_, i) => env.web.search(P, { query: `q${i}` })),
+    ...Array.from({ length: 2 }, (_, i) => env.web.fetch(P, { url: `https://example.org/${i}` })),
+  ]);
+  assert.equal(settled.filter((x) => x.status === 'fulfilled').length, 1);
+  assert.ok(settled.filter((x) => x.status === 'rejected').every((x) => x.reason.status === 429));
+  assert.equal(mock.requests.length, 1);
+  assert.equal(env.usage.totals(P).calls, 1);
+});
+
+test('R1: 并发调用各自重试，名额按每次物理请求占用，总数不超过上限', async () => {
+  const env = await webEnv({ budget: { calls: 4 } });
+  mock.script('/v1/tools/search', apiError(503), apiError(503), apiError(503), apiError(503), searchOk(), searchOk());
+  const settled = await Promise.allSettled(Array.from({ length: 3 }, (_, i) => env.web.search(P, { query: `q${i}` })));
+  assert.equal(mock.requests.length, 4);
+  assert.equal(env.usage.totals(P).calls, 4);
+  assert.ok(settled.some((x) => x.status === 'rejected' && x.reason.status === 429));
+});
+
+test('R1: 请求发出后、响应之前服务退出：重启后这次尝试照样计数（保守），不会被当成没发生', async () => {
+  const env = await projectEnv({ calls: 2 });
+  const id = env.usage.reserve(P, { api: 'search', attempt: 1, query: 'x' }); // 只有 start，没有 end
+  assert.ok(id);
+  const again = createUsage({ workbench: env.workbench, pricing: DEFAULTS.pricing });
+  assert.equal(again.totals(P).calls, 1);
+  assert.deepEqual(again.entries(P).map((e) => e.settled), [false]);
+  again.reserve(P, { api: 'search', attempt: 1 });
+  assert.throws(() => again.reserve(P, { api: 'search', attempt: 1 }), { kind: 'budget' });
+});
+
+test('R2: 已有来源卡的抓取绑定它自己的地址：不同 host、不同 path 都被拒绝，不会把别处的正文挂到它名下', async () => {
+  const env = await webEnv();
+  mock.script('/v1/tools/fetch', { body: { title: 'A', content: 'A 的正文' } });
+  await env.web.fetch(P, { url: 'https://example.org/A', create: true });
+  for (const url of ['https://example.org/B', 'https://other.example/A', 'https://example.org/A?x=1']) {
+    await assert.rejects(env.web.fetch(P, { url, source_id: 'S001' }), (e) => e.status === 400 && /地址不一致/.test(e.message), url);
+  }
+  assert.equal(mock.requests.length, 1); // 被拒的都没有发出去
+  // 同一地址（含规范化：主机大小写、默认端口）可以；省略 url 时从来源卡地址抓
+  mock.script('/v1/tools/fetch', { body: { title: 'A', content: 'A 的正文' } }, { body: { title: 'A', content: 'A 的正文（新）' } });
+  const same = await env.web.fetch(P, { url: 'https://EXAMPLE.org:443/A', source_id: 'S001' });
+  assert.equal(same.source.changed, false);
+  const noUrl = await env.web.fetch(P, { source_id: 'S001' });
+  assert.equal(noUrl.url, 'https://example.org/A');
+  assert.equal(mock.requests.at(-1).body.url, 'https://example.org/A');
+  assert.equal(env.gw.getRecord(P, 'S001').record.version, 2);
+});
+
+test('R2: 迁址只能由主持人显式进行，地址与正文一起更新；没有地址的来源同样需要迁址；失败抓取不会标记别的来源', async () => {
+  const env = await webEnv();
+  mock.script('/v1/tools/fetch', { body: { title: 'A', content: 'A 的正文' } });
+  await env.web.fetch(P, { url: 'https://example.org/A', create: true });
+  await assert.rejects(env.web.fetch(P, { url: 'https://example.org/B', source_id: 'S001', relocate: true }), { status: 403 });
+  await assert.rejects(env.web.fetch(P, { url: 'https://example.org/B', source_id: 'S001', relocate: true }, { actor: SYSTEM_FETCH }), { status: 403 });
+  mock.script('/v1/tools/fetch', { body: { title: 'B', content: 'B 的正文' } });
+  const moved = await env.web.fetch(P, { url: 'https://example.org/B', source_id: 'S001', relocate: true }, { actor: HUMAN });
+  assert.equal(moved.source.relocated, true);
+  const rec = env.gw.getRecord(P, 'S001').record;
+  assert.deepEqual([rec.url, rec.version, rec.provenance.kind], ['https://example.org/B', 2, 'human']);
+  // 没有地址的来源（书目）：不能直接抓，也不能借别人的地址
+  await submit(env.gw, P, [{ kind: 'source', expected_version: 0, data: { title: '某书', citation: '某书，第 3 页', text: '书里的一段' } }]);
+  await assert.rejects(env.web.fetch(P, { url: 'https://example.org/C', source_id: 'S002' }), (e) => e.status === 400 && /没有地址/.test(e.message));
+  // B 失败只影响 S001（地址绑定的抓取），S002 不受影响
+  mock.script('/v1/tools/fetch', apiError(404));
+  await assert.rejects(env.web.fetch(P, { source_id: 'S001' }), { status: 404 });
+  const av = env.usage.availabilityOf(P);
+  assert.equal(av.get('S001').state, 'temporarily_unavailable');
+  assert.equal(av.has('S002'), false);
+  // 不绑定来源卡的抓取，失败不计入任何来源
+  mock.script('/v1/tools/fetch', apiError(404));
+  await assert.rejects(env.web.fetch(P, { url: 'https://example.org/A' }), { status: 404 });
+  assert.equal(env.usage.availabilityOf(P).size, 1);
+});
+
+test('R3: 账户限速按每次物理请求执行：并发首发与重试交错时，任意 1 秒内都不超过 5 次', async () => {
+  const limits = { search: createRateLimiter(5), fetch: createRateLimiter(5) };
+  const c = client({ rateLimits: limits });
+  const env = await webEnv({ client: c, override: { retry: { max: 3, delaysSec: [0] } }, timeoutMs: 15_000 });
+  const starts = [];
+  let n = 0;
+  const mock2 = await startMock({ fallback: () => { starts.push(Date.now()); return ++n <= 5 ? apiError(503) : searchOk(); } });
+  try {
+    const c2 = createDeepseekClient({ apiKey: 'sk-test', baseUrl: mock2.url, rateLimits: limits });
+    const web = createWebTools({ client: c2, usage: env.usage, gateway: env.gw, workbench: env.workbench, timeoutMs: 15_000 });
+    await Promise.all(Array.from({ length: 5 }, (_, i) => web.search(P, { query: `q${i}` })));
+  } finally {
+    await mock2.close();
+  }
+  assert.equal(starts.length, 10);
+  for (let i = 5; i < starts.length; i++) assert.ok(starts[i] - starts[i - 5] >= 990, `第 ${i + 1} 次与第 ${i - 4} 次相隔 ${starts[i] - starts[i - 5]}ms`);
+});
+
+test('R3: 等待限速名额同样受总时限和“停止”约束', async () => {
+  let t = 0;
+  const limiter = createRateLimiter(1);
+  await limiter.take();
+  const ac = new AbortController();
+  setTimeout(() => ac.abort(new Error('stop')), 50);
+  const t0 = Date.now();
+  await assert.rejects(limiter.take(ac.signal), /stop/);
+  assert.ok(Date.now() - t0 < 500);
+  // 客户端的总时限也覆盖等待名额的时间
+  const busy = createRateLimiter(1);
+  await busy.take();
+  const c = client({ rateLimits: { search: busy } });
+  await assert.rejects(c.search({ query: 'x' }, { timeoutMs: 100 }), { kind: 'timeout' });
+  assert.equal(mock.requests.length, 0);
+  void t;
+});
+
+test('R4: 项目的重试配置对 Web 调用生效；两个项目各用各的，互不串扰', async () => {
+  const noRetry = await webEnv({ override: { retry: { max: 0, delaysSec: [0] } } });
+  mock.script('/v1/tools/search', apiError(503), searchOk());
+  await assert.rejects(noRetry.web.search(P, { query: 'x' }), { status: 502 });
+  assert.equal(mock.requests.length, 1);
+  mock.reset();
+  const twoRetries = await webEnv({ override: { retry: { max: 2, delaysSec: [0.01] } } });
+  mock.script('/v1/tools/search', apiError(503), apiError(503), apiError(503), searchOk());
+  mock.script('/v1/tools/fetch', apiError(503), { body: PAGE });
+  const [a, b] = await Promise.allSettled([twoRetries.web.search(P, { query: 'y' }), noRetry.web.fetch(P, { url: 'https://example.org/z' })]);
+  assert.equal(a.status, 'rejected'); // 3 次都 503：重试 2 次后放弃
+  assert.equal(b.status, 'rejected'); // 不重试的项目：第一次 503 就停
+  assert.equal(mock.requests.filter((r) => r.path === '/v1/tools/search').length, 3);
+  assert.equal(mock.requests.filter((r) => r.path === '/v1/tools/fetch').length, 1);
+});
+
+test('R5: 收到 200 头后正文断连按网络错误重试；完整但不合法的 JSON 仍是 parse 错误；超时和中止不误重试', async () => {
+  const http = await import('node:http');
+  let calls = 0;
+  let mode = 'break';
+  const srv = http.createServer(async (req, res) => {
+    for await (const _ of req) void _;
+    calls++;
+    if (mode === 'break-non200') {
+      res.writeHead(503, { 'Content-Type': 'application/json' });
+      res.write('{"error":');
+      return setTimeout(() => res.destroy(), 20);
+    }
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    if (mode === 'bad-json') return res.end('{not json');
+    if (mode === 'slow') return void setTimeout(() => res.end(JSON.stringify(searchOk().body)), 3000);
+    if (calls === 1) {
+      res.write('\n'); // 保活空行之后断开
+      return setTimeout(() => res.destroy(), 30);
+    }
+    res.end(JSON.stringify(searchOk().body));
+  });
+  await new Promise((r) => srv.listen(0, '127.0.0.1', r));
+  const c = createDeepseekClient({ apiKey: 'sk-test', baseUrl: `http://127.0.0.1:${srv.address().port}`, retry: { max: 3, delaysSec: [0] } });
+  try {
+    const r = await c.search({ query: 'x' });
+    assert.equal(r.results.length, 1);
+    assert.equal(calls, 2);
+    assert.equal(r.attempts[0].status, 200);
+    assert.match(r.attempts[0].error, /网络错误/);
+    calls = 1;
+    mode = 'break-non200';
+    await assert.rejects(c.search({ query: 'x' }), (e) => e.kind === 'network' && e.details.attempts.length === 4);
+    calls = 0;
+    mode = 'bad-json';
+    await assert.rejects(c.search({ query: 'x' }), (e) => e.kind === 'parse');
+    assert.equal(calls, 1);
+    calls = 0;
+    mode = 'slow';
+    await assert.rejects(c.search({ query: 'x' }, { timeoutMs: 200 }), { kind: 'timeout' });
+    assert.equal(calls, 1);
+    calls = 0;
+    const ac = new AbortController();
+    setTimeout(() => ac.abort(), 100);
+    await assert.rejects(c.search({ query: 'x' }, { signal: ac.signal }), { kind: 'aborted' });
+    assert.equal(calls, 1);
+  } finally {
+    srv.closeAllConnections();
+    await new Promise((r) => srv.close(r));
+  }
+});
+
+test('R6: Fetch 拿不到可用正文（空、缺 content、类型不对）是失败：HTTP 结果、账本、可获取性三者一致，快照保留', async () => {
+  const env = await webEnv();
+  mock.script('/v1/tools/fetch', { body: PAGE });
+  await env.web.fetch(P, { url: 'https://example.org/sanwu', create: true });
+  for (const body of [{ title: 't', content: '' }, { title: 't', content: '  \n ' }, { title: 't' }, { title: 't', content: 42 }]) {
+    mock.script('/v1/tools/fetch', apiError(404), { body });
+    await assert.rejects(env.web.fetch(P, { source_id: 'S001' }), { status: 404 }); // 先变成暂不可获取
+    await assert.rejects(env.web.fetch(P, { source_id: 'S001' }), (e) => e.status === 404 && e.details.kind === 'invalid', JSON.stringify(body));
+    const last = env.usage.entries(P).at(-1);
+    assert.deepEqual([last.api, last.ok, last.status, last.usd], ['fetch', false, 200, 0], JSON.stringify(body));
+    assert.equal(env.gw.getRecord(P, 'S001').availability.state, 'temporarily_unavailable', JSON.stringify(body));
+  }
+  assert.equal(env.gw.getRecord(P, 'S001').record.version, 1);
+  assert.equal(env.gw.trace(P, 'S001').root.quote_found, null);
+});
+
+test('正文快照登记：text_blob 只能指向登记过的快照，记录 JSON 之类的其他 blob 不行；追溯显示快照来处', async () => {
+  const env = await webEnv();
+  mock.script('/v1/tools/fetch', { body: PAGE });
+  const f = await env.web.fetch(P, { url: 'https://example.org/sanwu', create: true });
+  await submit(env.gw, P, [{ kind: 'claim', expected_version: 0, data: { type: 'fact', text: 'x', sources: [{ id: 'S001', version: 1, quote: '万八千岁' }] } }]);
+  // 记录 C001 自己的 JSON 也在 blob 目录里
+  const line = env.gw.commits(P).find((c) => c.records.some((r) => r.id === 'C001'));
+  const recordBlob = line.files[0].blob;
+  assert.throws(() => env.gw.receive(P, { request_id: rid(), changes: [{ kind: 'source', expected_version: 0, data: { title: 'x', url: 'https://a', text_blob: recordBlob } }] }, { actor: HUMAN }), /不是登记过的正文快照/);
+  // 登记过的快照可以被引用（例如主持人把同一份快照挂到另一张来源卡）
+  const ok = await submit(env.gw, P, [{ kind: 'source', expected_version: 0, data: { title: '同一份', url: 'https://example.org/sanwu', text_blob: f.text_blob } }]);
+  assert.equal(ok.result.state, 'applied');
+  const t = env.gw.trace(P, 'C001').root.sources[0];
+  assert.deepEqual([t.snapshot.origin, t.snapshot.url, t.snapshot.service], ['fetch', 'https://example.org/sanwu', 'deepseek-fetch']);
+  // 主持人录入的正文登记为 manual
+  await submit(env.gw, P, [{ kind: 'source', expected_version: 0, data: { title: '纸质书', citation: '某书，第 12 页', text: '引文所在的那一段' } }]);
+  const blob = env.gw.getRecord(P, 'S003').record.text_blob;
+  const { snapshotInfo } = await import('../../lib/workbench/snapshots.mjs');
+  assert.deepEqual([snapshotInfo(path.join(env.projectsDir, P), blob).origin, snapshotInfo(path.join(env.projectsDir, P), blob).by], ['manual', '主持人']);
 });
