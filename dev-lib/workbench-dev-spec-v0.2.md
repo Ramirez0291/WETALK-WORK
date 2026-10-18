@@ -2,7 +2,7 @@
 
 Oct 18, 2026 · @LI(RAMI)LINGYUE
 
-> 本地修订（2026-10-18，WP1 评审后经主持人同意）：模块清单补 `git.mjs`、`fsx.mjs`，`templates/` 分为项目骨架与 PPT 模板；数据模型补 `provenance`（内容生产者身份）；契约二补 git 留档的字面路径与换行约定；PowerPoint 待定事项更新；修正路径笔误。WP2 评审后经主持人同意，再补：作品编号前缀、候选稿目录名、核验与异议的写入推迟到 WP5、inbox 提前到 WP2、projects 仓库的忽略规则、按 blob 字节留档，以及契约二的写入故障、编号不复用、正式状态取已提交快照、失效锁的接管规则。WP3 后经主持人同意，再补：来源可获取性移出来源卡改为派生、quote 指针检查提前到晋升时及引文定位规则、来源正文只来自 Fetch 或主持人录入、`deepseek` 与 `pricing` 配置、用量账本与新接口、费用软上限。线上版本尚未同步这些修订。
+> 本地修订（2026-10-18，WP1 评审后经主持人同意）：模块清单补 `git.mjs`、`fsx.mjs`，`templates/` 分为项目骨架与 PPT 模板；数据模型补 `provenance`（内容生产者身份）；契约二补 git 留档的字面路径与换行约定；PowerPoint 待定事项更新；修正路径笔误。WP2 评审后经主持人同意，再补：作品编号前缀、候选稿目录名、核验与异议的写入推迟到 WP5、inbox 提前到 WP2、projects 仓库的忽略规则、按 blob 字节留档，以及契约二的写入故障、编号不复用、正式状态取已提交快照、失效锁的接管规则。WP3 后经主持人同意，再补：来源可获取性移出来源卡改为派生、quote 指针检查提前到晋升时及引文定位规则、来源正文只来自 Fetch 或主持人录入、`deepseek` 与 `pricing` 配置、用量账本与新接口、费用软上限。WP3 评审修复后经主持人同意，再补：用量账本先占后结、Fetch 绑定来源地址与迁址、正文快照登记、按物理请求限速与项目重试策略、Codex 审计实测结论。线上版本尚未同步这些修订。
 
 本文档把 claudework 多 Agent 工坊设计 V2 拆成可开发的工作包，在从 WETALK 派生的新仓库（暂名 `WETALK-WORK`）里实现。WETALK 本身保持轻便，不合入工坊功能。v0.2 根据评审补了四份核心契约（证据与核验、提交与恢复、任务与租约、上下文与可见性），状态改为由记录派生，并重排了工作包。
 
@@ -183,7 +183,7 @@ WETALK-WORK\projects          整个目录是一个 git 仓库
 
 **引文定位规则：** 两边都去掉 Markdown 的标点转义（Fetch 返回的正文会把 `.` 写成 `\.`），并把连续空白压成一个空格；其余字符原样比较，全半角、繁简、标点差异都不归一。来源没有正文快照时，带引文的论断不能晋升。
 
-**正文的来处：** 来源正文快照只有两个来处：Fetch 抓到的正文，或主持人在受控入口手工录入（例如纸质书，至少录入引文所在的段落）。Agent 不能直接写正文，搜索结果的 summary、snippet、content 都不能成为快照。
+**正文的来处：** 来源正文快照只有两个来处：Fetch 抓到的正文，或主持人在受控入口手工录入（例如纸质书，至少录入引文所在的段落）。Agent 不能直接写正文，搜索结果的 summary、snippet、content 都不能成为快照。两种快照都登记在 `snapshots.jsonl`，`text_blob` 只能指向登记过的快照（blob 目录里还有记录 JSON 等内容，存在不等于是正文）。
 
 **第二步：是否支持（核验者）**
 
@@ -303,7 +303,7 @@ WETALK-WORK\projects          整个目录是一个 git 仓库
 - 服务进程自己拉起的调用在重启后已不存在：这些任务的当前尝试记为 abandoned，任务回到 open；
 - 通过 MCP 认领的外部会话可能仍在运行：它们的租约保持到期为止，可以继续续租。
 
-**上限：** 每个项目的调用次数、API 费用、任务深度、单任务尝试次数都必须有上限，数值可调。超出后，新任务和重试都进入“待你决定”。API 调用内部的重试也计入调用次数。每次尝试之前检查上限；费用要等返回才知道，所以费用上限是软上限（最后一次调用可能略超），调用次数是硬上限。
+**上限：** 每个项目的调用次数、API 费用、任务深度、单任务尝试次数都必须有上限，数值可调。超出后，新任务和重试都进入“待你决定”。API 调用内部的重试也计入调用次数。每次物理请求发出之前，在同一个同步步骤里检查上限并占用一个调用名额（账本先写 start 行），结束后写 end 行结算，只结算不再计数。调用次数按 start 计，含进行中和中途退出未结算的尝试，是硬上限；费用按 end 结算，要等返回才知道，是软上限，超出量最多是并发在途请求的费用之和。
 
 **验收案例**
 
@@ -328,7 +328,7 @@ WETALK-WORK\projects          整个目录是一个 git 仓库
 
 - **Claude：** 密封任务沿用 WETALK 现有的无工具调用。读资料的任务只开放读类工具并关闭 Bash，用权限规则拒绝读取 projects 目录的其余部分。
 - **DeepSeek：** 走 API，本来就没有文件访问，只拿到任务包。
-- **Codex：** 命令行 Agent 自带执行命令的能力，只读沙箱也能读其他目录，WETALK 现有适配器也是如此。密封任务里它的调用改用 JSON 事件输出并审计执行过的命令（需实测）；只要出现读文件的命令，该稿标为“独立性未证明”，不参与本轮比较。
+- **Codex：** 命令行 Agent 自带执行命令的能力。实测（2026-10-18，codex-cli 0.162）：只读沙箱能读工作目录之外的文件；用户配置里的 MCP 服务在 `exec` 下也会加载，可以作为另一条读取通道。密封类调用一律加 `--ignore-user-config --disable shell_tool --disable unified_exec`（不加载 MCP、没有 shell，并显式传 `-m`），同时用 `--json` 事件审计：除 `agent_message` 与推理摘要之外，出现任何 item 类型（`command_execution`、`mcp_tool_call`、`file_change`、`web_search` 及以后新增的类型），该稿都标为“独立性未证明”，不参与本轮比较。审计依据是 Codex 自报的事件，两道防线都不等于操作系统级隔离；CLI 升级后要重跑实测探针。
 
 **密封期间不落盘：** 草稿和原始回复只保存在服务进程内存里；调用记录先写去掉正文的占位，揭晓后再补写。服务若在揭晓前崩溃，本轮重跑。这样即使某个 Agent 能读整个磁盘，也读不到别人还在密封中的稿子。
 
@@ -388,7 +388,9 @@ WETALK-WORK\projects          整个目录是一个 git 仓库
 - 重试：408、429、5xx 按退避重试；其他 4xx 不重试。重试计入项目调用上限。
 - 用量：calls.jsonl 增加 `usage` 字段；Claude 适配器顺便记下 JSON 输出里已有的 modelUsage。
 - `web.mjs`：封装 Search 与 Fetch；Search 结果只作线索，不存快照；Fetch 结果存为来源正文快照 blob，需要时经提交入口建立或更新来源卡；失败时来源（派生）为 temporarily\_unavailable，来源不升版，保留已有快照；遵守每秒 5 次的账户限速。
-- `usage.mjs`：项目用量账本 `<项目>/usage.jsonl`，每一次尝试（含失败与重试）一行，调用次数与费用上限按它累计；来源可获取性由它和 `<项目>/availability.jsonl` 派生。两份账本不进 git。
+- `usage.mjs`：项目用量账本 `<项目>/usage.jsonl`，每一次物理请求（含失败与重试）两行：发送前的 start（占用名额）与结束后的 end（结算）；调用次数与费用上限按它累计（见契约三“上限”）。来源可获取性由它（只看与来源卡地址绑定的抓取）和 `<项目>/availability.jsonl` 派生。两份账本不进 git。
+- 账户限速按每次物理请求（含重试）执行，Search、Fetch 各一个限速器，所有项目共用；等待名额的时间计入总时限，可被中止。重试策略取每次逻辑调用时项目生效的 `retry`。
+- `snapshots.mjs`：正文快照登记 `<项目>/snapshots.jsonl`。来源卡的 `text_blob` 只能指向登记过的快照：`fetch`（记录实际抓取地址、时间和服务，注明是第三方服务返回的 Markdown，不保证与网页逐字一致）或 `manual`（主持人录入，记录录入人）。
 
 * [ ] 能调用并记录用量；超时能退出，“停止”能中断
 * [ ] 用本地模拟服务器验证：429 和 5xx 会重试，400 不重试
@@ -453,7 +455,7 @@ WETALK-WORK\projects          整个目录是一个 git 仓库
 | POST | `/submissions/:sid/promote` | 晋升为正式版本 | WP2 |
 | GET | `/commits` | 每次提交的数据状态与留档状态 | WP2 |
 | GET | `/trace/:id` | 页面 → 论断 → 来源 → 引文 | WP2 |
-| POST | `/web/search`、`/web/fetch` | DeepSeek Search（只给线索）/ Fetch（存快照；`{url, source_id?, create?}`） | WP3 |
+| POST | `/web/search`、`/web/fetch` | DeepSeek Search（只给线索）/ Fetch（存快照；`{url?, source_id?, create?, relocate?}`：给了 source_id 就从来源卡自己的地址抓，请求地址不一致即拒绝；迁址 relocate 只限主持人，地址与正文一起更新） | WP3 |
 | GET | `/usage` | 项目用量合计与最近的尝试 | WP3 |
 | POST | `/sources/:id/availability` | 主持人确认来源已不存在（gone）或撤销 | WP3 |
 | GET / POST | `/tasks` | 任务列表；新建或提议任务 | WP4 |
@@ -499,7 +501,7 @@ SSE 新增事件：`record`、`task`、`verification`、`objection`、`commit`�
 | `lease.minutes` | 任务租约时长 | 30（建议初值） |
 | `cooldown.apiSeconds` | API 被限流后的等待 | 优先按 Retry-After；没有时 60 秒 |
 | `cooldown.cliMinutes` | 订阅版命令行工具额度用尽后的冷却 | 60（建议初值） |
-| `retry.max` | API 失败重试次数 | 3，间隔 2、4、8 秒 |
+| `retry.max` | API 失败重试次数（项目可覆盖，每次逻辑调用取当时的生效值） | 3，间隔 2、4、8 秒 |
 | `deepseek.baseUrl` / `deepseek.timeoutSec` / `deepseek.webPerSecond` | DeepSeek 接口地址；单次调用的总时限（含全部重试与等待）；Search、Fetch 各自的每秒次数 | `https://api.deepseek.com`；600；5。只能全局设置 |
 | `pricing` | 各模型高峰价（缓存命中输入、未命中输入、输出，美元 / 100 万 token）、低谷折扣、高峰时段（UTC，周一至周五）、Search / Fetch 单价 | 按 2026-10-18 官方价目；不识别中国节假日，一律按高峰估算。只能全局设置 |
 | `task.maxAttempts` | 单任务最大尝试次数 | 3 |
@@ -560,7 +562,7 @@ SSE 新增事件：`record`、`task`、`verification`、`objection`、`commit`�
 
 - [x] 试运行 PPT 的目标观众，写进 project.md（WP1）：已由主持人填写
 - [ ] 渲染检查用 PowerPoint 还是 LibreOffice（WP7）：已确认本机装有 PowerPoint、没有 LibreOffice；脚本能否可靠地自动化 PowerPoint 导出与渲染，在 WP7 实测后关闭
-- [ ] Codex 的 JSON 事件输出能否可靠地审计执行过的命令，在 WP4 开始前实测
+- [x] Codex 的 JSON 事件输出能否可靠地审计执行过的命令：能，按 item 类型白名单审计，密封类调用关掉 shell 与用户配置（见契约四与 `astra-log/WP4-preflight-codex-2026-10-18.md`）
 
 ## 参考
 
