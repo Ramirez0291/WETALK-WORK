@@ -2,7 +2,7 @@
 
 Oct 18, 2026 · @LI(RAMI)LINGYUE
 
-> 本地修订（2026-10-18，WP1 评审后经主持人同意）：模块清单补 `git.mjs`、`fsx.mjs`，`templates/` 分为项目骨架与 PPT 模板；数据模型补 `provenance`（内容生产者身份）；契约二补 git 留档的字面路径与换行约定；PowerPoint 待定事项更新；修正路径笔误。WP2 评审后经主持人同意，再补：作品编号前缀、候选稿目录名、核验与异议的写入推迟到 WP5、inbox 提前到 WP2、projects 仓库的忽略规则、按 blob 字节留档，以及契约二的写入故障、编号不复用、正式状态取已提交快照、失效锁的接管规则。线上版本尚未同步这些修订。
+> 本地修订（2026-10-18，WP1 评审后经主持人同意）：模块清单补 `git.mjs`、`fsx.mjs`，`templates/` 分为项目骨架与 PPT 模板；数据模型补 `provenance`（内容生产者身份）；契约二补 git 留档的字面路径与换行约定；PowerPoint 待定事项更新；修正路径笔误。WP2 评审后经主持人同意，再补：作品编号前缀、候选稿目录名、核验与异议的写入推迟到 WP5、inbox 提前到 WP2、projects 仓库的忽略规则、按 blob 字节留档，以及契约二的写入故障、编号不复用、正式状态取已提交快照、失效锁的接管规则。WP3 后经主持人同意，再补：来源可获取性移出来源卡改为派生、quote 指针检查提前到晋升时及引文定位规则、来源正文只来自 Fetch 或主持人录入、`deepseek` 与 `pricing` 配置、用量账本与新接口、费用软上限。线上版本尚未同步这些修订。
 
 本文档把 claudework 多 Agent 工坊设计 V2 拆成可开发的工作包，在从 WETALK 派生的新仓库（暂名 `WETALK-WORK`）里实现。WETALK 本身保持轻便，不合入工坊功能。v0.2 根据评审补了四份核心契约（证据与核验、提交与恢复、任务与租约、上下文与可见性），状态改为由记录派生，并重排了工作包。
 
@@ -125,7 +125,7 @@ WETALK-WORK\projects          整个目录是一个 git 仓库
 
 | 实体 | 文件 | 关键字段 | 写入者 |
 | --- | --- | --- | --- |
-| 来源卡 | `sources/S###.json` | title、author、edition、citation 或 url、origin（最早可追溯出处）、text\_blob（正文快照）、availability | 提交入口 |
+| 来源卡 | `sources/S###.json` | title、author、edition、citation 或 url、origin（最早可追溯出处）、text\_blob（正文快照）、retrieved\_at（快照时间）。可获取性不在来源卡里，见契约一 | 提交入口 |
 | 论断 | `claims/C###.json` | type、text、sources（含 locator 与 quote）、earliest\_attestation（textual 必填） | 提交入口 |
 | 核验记录 | `verifications/V###.json` | target（论断 id@version）、source\_versions、verdict、reason、support\_quote、verifier（Agent、模型、厂商，或你） | 提交入口 |
 | 异议 | `objections/O###.json` | target、category、pointer、state、raised\_by、resolution | 提交入口 |
@@ -177,9 +177,13 @@ WETALK-WORK\projects          整个目录是一个 git 仓库
 
 | 指针 | 程序检查 | 能证明 | 不能证明 |
 | --- | --- | --- | --- |
-| quote | 引文出现在来源正文快照中 | 引文存在 | 引文支持目标结论 |
+| quote | 引文出现在所引来源版本的正文快照中（晋升时检查，不通过就不能晋升） | 引文存在 | 引文支持目标结论 |
 | fetch\_failure | Fetch 失败记录存在 | 这次获取失败 | 来源不存在，或原有结论错误 |
 | missing\_source | 论断的 sources 为空 | 缺少来源关联 | — |
+
+**引文定位规则：** 两边都去掉 Markdown 的标点转义（Fetch 返回的正文会把 `.` 写成 `\.`），并把连续空白压成一个空格；其余字符原样比较，全半角、繁简、标点差异都不归一。来源没有正文快照时，带引文的论断不能晋升。
+
+**正文的来处：** 来源正文快照只有两个来处：Fetch 抓到的正文，或主持人在受控入口手工录入（例如纸质书，至少录入引文所在的段落）。Agent 不能直接写正文，搜索结果的 summary、snippet、content 都不能成为快照。
 
 **第二步：是否支持（核验者）**
 
@@ -201,7 +205,7 @@ WETALK-WORK\projects          整个目录是一个 git 仓库
 | needs\_user | 核验结论不一致，或对分类有争议 | 是 | 由你裁决 |
 | withdrawn | 提出者撤回 | 否 | — |
 
-**来源可获取性**单独记录，不算异议：
+**来源可获取性**单独记录，不算异议，也不写进来源卡（否则 Fetch 失败会让来源升版、下游失效）。它由两份记录派生：主持人的确认（`availability.jsonl`），以及最近一次针对该来源的 Fetch 结果（用量账本）。主持人确认的 gone 优先，之后抓取成功也不改变，只能由主持人撤销；从没抓过的为 unknown。
 
 - available：正常；
 - temporarily\_unavailable：Fetch 失败。保留已有快照，快照仍可作证据；按计划重试。没有快照的来源无法支持任何核验；
@@ -299,7 +303,7 @@ WETALK-WORK\projects          整个目录是一个 git 仓库
 - 服务进程自己拉起的调用在重启后已不存在：这些任务的当前尝试记为 abandoned，任务回到 open；
 - 通过 MCP 认领的外部会话可能仍在运行：它们的租约保持到期为止，可以继续续租。
 
-**上限：** 每个项目的调用次数、API 费用、任务深度、单任务尝试次数都必须有上限，数值可调。超出后，新任务和重试都进入“待你决定”。API 调用内部的重试也计入调用次数。
+**上限：** 每个项目的调用次数、API 费用、任务深度、单任务尝试次数都必须有上限，数值可调。超出后，新任务和重试都进入“待你决定”。API 调用内部的重试也计入调用次数。每次尝试之前检查上限；费用要等返回才知道，所以费用上限是软上限（最后一次调用可能略超），调用次数是硬上限。
 
 **验收案例**
 
@@ -383,7 +387,8 @@ WETALK-WORK\projects          整个目录是一个 git 仓库
 - `agents.mjs` 新增 `deepseek` 适配器：用 Node 自带的 fetch 调用 OpenAI 兼容接口；密钥只从环境变量 `DEEPSEEK_API_KEY` 读取；沿用现有的超时与中止。
 - 重试：408、429、5xx 按退避重试；其他 4xx 不重试。重试计入项目调用上限。
 - 用量：calls.jsonl 增加 `usage` 字段；Claude 适配器顺便记下 JSON 输出里已有的 modelUsage。
-- `web.mjs`：封装 Search 与 Fetch；Fetch 结果存为来源正文快照 blob；失败时来源标为 temporarily\_unavailable，保留已有快照；遵守每秒 5 次的账户限速。
+- `web.mjs`：封装 Search 与 Fetch；Search 结果只作线索，不存快照；Fetch 结果存为来源正文快照 blob，需要时经提交入口建立或更新来源卡；失败时来源（派生）为 temporarily\_unavailable，来源不升版，保留已有快照；遵守每秒 5 次的账户限速。
+- `usage.mjs`：项目用量账本 `<项目>/usage.jsonl`，每一次尝试（含失败与重试）一行，调用次数与费用上限按它累计；来源可获取性由它和 `<项目>/availability.jsonl` 派生。两份账本不进 git。
 
 * [ ] 能调用并记录用量；超时能退出，“停止”能中断
 * [ ] 用本地模拟服务器验证：429 和 5xx 会重试，400 不重试
@@ -448,7 +453,9 @@ WETALK-WORK\projects          整个目录是一个 git 仓库
 | POST | `/submissions/:sid/promote` | 晋升为正式版本 | WP2 |
 | GET | `/commits` | 每次提交的数据状态与留档状态 | WP2 |
 | GET | `/trace/:id` | 页面 → 论断 → 来源 → 引文 | WP2 |
-| POST | `/web/search`、`/web/fetch` | DeepSeek Search / Fetch，并存快照 | WP3 |
+| POST | `/web/search`、`/web/fetch` | DeepSeek Search（只给线索）/ Fetch（存快照；`{url, source_id?, create?}`） | WP3 |
+| GET | `/usage` | 项目用量合计与最近的尝试 | WP3 |
+| POST | `/sources/:id/availability` | 主持人确认来源已不存在（gone）或撤销 | WP3 |
 | GET / POST | `/tasks` | 任务列表；新建或提议任务 | WP4 |
 | POST | `/tasks/:t/claim`、`/renew`、`/release`、`/cancel` | 认领、续租、释放、取消 | WP4 |
 | GET | `/tasks/:t/packet` | 任务包，含实际输入 | WP4 |
@@ -493,6 +500,8 @@ SSE 新增事件：`record`、`task`、`verification`、`objection`、`commit`�
 | `cooldown.apiSeconds` | API 被限流后的等待 | 优先按 Retry-After；没有时 60 秒 |
 | `cooldown.cliMinutes` | 订阅版命令行工具额度用尽后的冷却 | 60（建议初值） |
 | `retry.max` | API 失败重试次数 | 3，间隔 2、4、8 秒 |
+| `deepseek.baseUrl` / `deepseek.timeoutSec` / `deepseek.webPerSecond` | DeepSeek 接口地址；单次调用的总时限（含全部重试与等待）；Search、Fetch 各自的每秒次数 | `https://api.deepseek.com`；600；5。只能全局设置 |
+| `pricing` | 各模型高峰价（缓存命中输入、未命中输入、输出，美元 / 100 万 token）、低谷折扣、高峰时段（UTC，周一至周五）、Search / Fetch 单价 | 按 2026-10-18 官方价目；不识别中国节假日，一律按高峰估算。只能全局设置 |
 | `task.maxAttempts` | 单任务最大尝试次数 | 3 |
 | `task.maxDepth` | 自动提议任务的最大深度 | 3 |
 | `budget.calls` | 每个项目的模型调用次数上限 | 300（建议初值） |
