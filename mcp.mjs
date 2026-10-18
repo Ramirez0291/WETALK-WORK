@@ -3,7 +3,21 @@
 // 身份由环境变量 WETALK_AGENT 决定；需要 server.mjs 已经在运行。
 import readline from 'node:readline';
 
-const BASE = (process.env.WETALK_URL || 'http://127.0.0.1:7788').replace(/\/$/, '');
+import fs from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+// 默认连本仓库配置里的端口（工坊默认 7790），WETALK_URL 可覆盖
+function defaultBase() {
+  try {
+    const root = path.dirname(fileURLToPath(import.meta.url));
+    const cfg = JSON.parse(fs.readFileSync(path.resolve(process.env.WETALK_CONFIG || path.join(root, 'wetalk.config.json')), 'utf8'));
+    return `http://127.0.0.1:${cfg.port || 7788}`;
+  } catch {
+    return 'http://127.0.0.1:7788';
+  }
+}
+const BASE = (process.env.WETALK_URL || defaultBase()).replace(/\/$/, '');
 const AGENT = (process.env.WETALK_AGENT || 'Guest-AI').slice(0, 40);
 
 async function api(method, path, body) {
@@ -121,6 +135,76 @@ const tools = [
       const q = thread_id ? `?thread=${thread_id}` : '';
       const rev = await api('PUT', `/api/memories/${encodeURIComponent(AGENT)}${q}`, { author: AGENT, content, threadId: thread_id, baseVersion: base_version });
       return `记忆本（空间「${rev.space}」）已更新为第 ${rev.version} 版。`;
+    },
+  },
+
+  // ---------- 工坊：任务、交稿、记录与追溯（都不返回密封中的内容） ----------
+  {
+    name: 'wetalk_task_list',
+    description: '列出工坊某个项目的任务（可按状态筛选：open 表示可以认领）。',
+    inputSchema: {
+      type: 'object',
+      properties: { project: { type: 'string', description: '项目名' }, state: { type: 'string', description: '状态（可选）：open / claimed / submitted / done / failed / cancelled / needs_user' } },
+      required: ['project'],
+    },
+    async run({ project, state }) {
+      const list = await api('GET', `/api/projects/${encodeURIComponent(project)}/tasks${state ? `?state=${state}` : ''}`);
+      if (!list.length) return '没有任务。';
+      return list.map((t) => `${t.id} [${t.state}] ${t.type}（${t.visibility}）「${t.title}」${t.assigned_to ? ` 指派给 ${t.assigned_to}` : ''}`).join('\n');
+    },
+  },
+  {
+    name: 'wetalk_task_claim',
+    description: `以「${AGENT}」的身份认领一个 open 的任务，返回租约凭证（attempt、lease_token）和任务包。交稿和续租都要带上凭证；租约到期未续租会被收回。密封类任务（起草、匿名评审、观众型读者）只能由服务端派发，不能在这里认领。`,
+    inputSchema: { type: 'object', properties: { project: { type: 'string' }, task_id: { type: 'string' } }, required: ['project', 'task_id'] },
+    async run({ project, task_id }) {
+      const r = await api('POST', `/api/projects/${encodeURIComponent(project)}/tasks/${task_id}/claim`, { agent: AGENT });
+      return `已认领 ${task_id}：attempt=${r.attempt}，lease_token=${r.lease_token}，租约到 ${fmtTime(r.lease_until)}。\n任务包 ${r.packet.id}：\n\n${r.packet.prompt}`;
+    },
+  },
+  {
+    name: 'wetalk_task_renew',
+    description: '续租：在租约到期前延长持有时间。',
+    inputSchema: { type: 'object', properties: { project: { type: 'string' }, task_id: { type: 'string' }, attempt: { type: 'integer' }, lease_token: { type: 'string' } }, required: ['project', 'task_id', 'attempt', 'lease_token'] },
+    async run({ project, task_id, attempt, lease_token }) {
+      const r = await api('POST', `/api/projects/${encodeURIComponent(project)}/tasks/${task_id}/renew`, { attempt, lease_token });
+      return `已续租到 ${fmtTime(r.lease_until)}。`;
+    },
+  },
+  {
+    name: 'wetalk_submit',
+    description: '交稿：changes 是提交入口的改动数组（与任务包里的提交格式一致）。必须带认领时拿到的 attempt 和 lease_token；request_id 用于重试时去重，同一次交稿重试时保持不变。',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        project: { type: 'string' }, task_id: { type: 'string' }, attempt: { type: 'integer' }, lease_token: { type: 'string' },
+        request_id: { type: 'string', description: '8–100 位，同一次交稿的重试保持不变' },
+        changes: { type: 'array', items: { type: 'object' } },
+      },
+      required: ['project', 'task_id', 'attempt', 'lease_token', 'request_id', 'changes'],
+    },
+    async run({ project, task_id, ...rest }) {
+      const r = await api('POST', `/api/projects/${encodeURIComponent(project)}/tasks/${task_id}/submit`, rest);
+      if (r.receipt.state === 'draft') return `栅栏检查没通过（${r.receipt.reason}），结果已存为历史草稿，不会晋升。`;
+      if (r.rejected) return `已收稿，但没能晋升：${JSON.stringify(r.rejected.reasons)}。任务现在是 ${r.task.state}。`;
+      return `已收稿并晋升：提交 ${r.result.cid}，${r.result.records.map((x) => `${x.id} v${x.version}`).join('、')}。任务现在是 ${r.task.state}。`;
+    },
+  },
+  {
+    name: 'wetalk_record_read',
+    description: '读取工坊的一条正式记录（来源卡 S###、论断 C###、幻灯片 SL### 等）及其派生状态。',
+    inputSchema: { type: 'object', properties: { project: { type: 'string' }, id: { type: 'string' } }, required: ['project', 'id'] },
+    async run({ project, id }) {
+      const r = await api('GET', `/api/projects/${encodeURIComponent(project)}/records/${id}`);
+      return JSON.stringify({ record: r.record, status: r.status, availability: r.availability }, null, 2);
+    },
+  },
+  {
+    name: 'wetalk_trace',
+    description: '追溯：页面 → 论断 → 来源 → 原文位置。',
+    inputSchema: { type: 'object', properties: { project: { type: 'string' }, id: { type: 'string' } }, required: ['project', 'id'] },
+    async run({ project, id }) {
+      return JSON.stringify(await api('GET', `/api/projects/${encodeURIComponent(project)}/trace/${id}`), null, 2);
     },
   },
 ];

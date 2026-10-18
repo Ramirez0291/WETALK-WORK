@@ -10,6 +10,9 @@ import { runAgent, buildPrompt, parseReply, resolveCommand, listOptions, isCombi
 import { createDeepseekClient, createRateLimiter, chatCost } from './lib/workbench/deepseek.mjs';
 import { createUsage } from './lib/workbench/usage.mjs';
 import { createWebTools } from './lib/workbench/web.mjs';
+import { createTaskBoard } from './lib/workbench/tasks.mjs';
+import { createRunner } from './lib/workbench/runner.mjs';
+import { createSealedStore } from './lib/workbench/visibility.mjs';
 import { RULES, tally, decideOutcome, buildVotePrompt, parseVote, buildDraftPrompt, parseDraft, resultText } from './lib/voting.mjs';
 import { createWorkbench, loadDefaults } from './lib/workbench/project.mjs';
 import { workbenchRoutes } from './lib/workbench/http.mjs';
@@ -38,11 +41,15 @@ const deepseek = createDeepseekClient({
   rateLimits: { search: createRateLimiter(WB_DEFAULTS.deepseek.webPerSecond), fetch: createRateLimiter(WB_DEFAULTS.deepseek.webPerSecond) },
 });
 const usage = createUsage({ workbench, pricing: WB_DEFAULTS.pricing });
+const wbEvent = (ev) => broadcast({ ...ev, type: `wb-${ev.type}` }); // 工坊事件里从不带正文
+// 任务看板（契约三）：任务状态只由它改变；它同时是提交入口的栅栏
+const board = createTaskBoard({ workbench, usage, onEvent: wbEvent });
 // 提交入口：启动时取得项目目录的单实例锁并做崩溃恢复，之后它是正式区唯一的写入者
 const gateway = createCommitGateway({
   workbench,
   defaults: WB_DEFAULTS,
-  onEvent: (ev) => broadcast({ ...ev, type: `wb-${ev.type}` }),
+  fence: board.fence,
+  onEvent: wbEvent,
   availabilityOf: (p, urlOf) => usage.availabilityOf(p, { urlOf }),
 });
 const web = createWebTools({ client: deepseek, usage, gateway, workbench, timeoutMs: WB_DEFAULTS.deepseek.timeoutSec * 1000 });
@@ -56,6 +63,31 @@ try {
 process.on('exit', () => gateway.stop());
 for (const sig of ['SIGINT', 'SIGTERM', 'SIGBREAK']) process.on(sig, () => process.exit(0));
 gateway.startArchiveRetry();
+// 密封结果只在内存里；派发器按可见性调用参与者
+const sealed = createSealedStore();
+const participantById = Object.assign((id) => participants.find((p) => p.id === id) ?? null, { all: () => participants });
+const runner = createRunner({
+  workbench, gateway, board, usage, sealed, participants: participantById, runAgent, deepseek,
+  workRoot: path.join(DATA_DIR, 'work'), sandboxDir: SANDBOX,
+  templateText: fs.readFileSync(path.join(ROOT, 'templates', 'project', 'project.md'), 'utf8'),
+  timeoutMs: (config.timeoutSec || 300) * 1000, onEvent: wbEvent,
+});
+// 任务的重启恢复：服务自己发起的调用已不存在，这些尝试释放；已交稿但没来得及晋升的，补一次晋升
+for (const { name } of workbench.list()) {
+  const released = board.recover(name);
+  if (released.length) console.log(`[${name}] 重启释放任务：${released.join('、')}`);
+  for (const t of board.list(name, { state: 'submitted' })) {
+    const sid = t.attempts.find((a) => a.n === t.attempt)?.sid;
+    if (!sid) continue;
+    const cid = gateway.log.cidOfSid(name, sid);
+    if (cid) board.fence.onPromoted(name, t.id, { cid, records: gateway.log.applied(cid).records });
+    else gateway.promote(name, sid).catch(() => {}); // 成败由提交入口回调任务状态
+  }
+}
+// 租约到期的检查：读接口时会顺带清理，这里再定时扫一遍
+setInterval(() => {
+  for (const { name } of workbench.list()) board.sweep(name);
+}, 30_000).unref();
 // 主持人入口的令牌：每次启动重新生成，只出现在工坊页面里
 const HOST_TOKEN = crypto.randomBytes(24).toString('hex');
 
@@ -1153,7 +1185,10 @@ const routes = [
     return publicParticipant(p);
   }],
 
-  ...workbenchRoutes({ workbench, gateway, web, usage, readJson, hostToken: HOST_TOKEN, humanName: config.humanName }),
+  ...workbenchRoutes({
+    workbench, gateway, web, usage, board, runner, sealed, readJson, hostToken: HOST_TOKEN, humanName: config.humanName,
+    participantByName: (name) => findParticipant(name),
+  }),
 ];
 
 const server = http.createServer(async (req, res) => {

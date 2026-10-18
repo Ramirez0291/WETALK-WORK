@@ -22,6 +22,7 @@
 
   <nav class="tabs" id="tabs">
     <button data-tab="overview" class="on">概况</button>
+    <button data-tab="tasks">任务</button>
     <button data-tab="records">记录</button>
     <button data-tab="trace">追溯</button>
     <button data-tab="commits">提交与留档</button>
@@ -79,6 +80,19 @@
     </section>
 
     <section id="tab-inbox" hidden><div id="inboxList"></div></section>
+
+    <section id="tab-tasks" hidden>
+      <form id="newTask" class="tools">
+        <select id="taskType"></select>
+        <input id="taskTitle" placeholder="标题" maxlength="200">
+        <input id="taskGoal" placeholder="目标（可选）" maxlength="4000" size="30">
+        <input id="taskInputs" placeholder="输入，例如 S001@1, C002@1" size="24">
+        <button class="primary">新建任务</button>
+      </form>
+      <p class="hint">密封类任务（竞争起草、匿名评审、观众型读者）只能由服务端派发：结果在揭晓之前只留在服务进程内存里，界面和文件里都看不到。读资料的任务也可以由 MCP 会话认领。</p>
+      <div id="taskList"></div>
+      <div id="taskDetail" class="detail" hidden></div>
+    </section>
   </main>
 
   <div id="toast" class="toast" hidden></div>

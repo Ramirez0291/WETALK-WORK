@@ -97,6 +97,13 @@ const verif = (s) => (s.verification ? badge(...VER[s.verification.state]) : '')
 const blocks = (s) => (s.blockers.length ? badge(`阻塞 ${s.blockers.join('、')}`, 'b-bad') : '');
 const titleOf = (r) => r.title ?? r.text ?? r.target?.id ?? '';
 
+const TASK_STATE = {
+  proposed: ['已提出', 'b-muted'], open: ['可认领', 'b-warn'], claimed: ['进行中', 'b-warn'], submitted: ['已交稿', 'b-warn'],
+  done: ['完成', 'b-ok'], failed: ['失败', 'b-bad'], cancelled: ['已取消', 'b-muted'], needs_user: ['待你决定', 'b-bad'],
+};
+const VIS = { sealed: '密封起草', review: '匿名评审', audience: '观众型读者', read: '读资料', export: '导出' };
+let people = [];
+
 const VIEWS = {
   async overview() {
     const o = await api('GET', P());
@@ -171,12 +178,53 @@ const VIEWS = {
     if (!$('#changes').value) $('#changes').value = EXAMPLES.source();
   },
 
+  async tasks() {
+    const [list, o, state] = await Promise.all([api('GET', P('/tasks')), api('GET', P()), api('GET', '/api/state')]);
+    people = state.participants.filter((x) => x.available);
+    const types = [...Object.keys(o.config.modes), 'anonymous_review', 'audience_reader'];
+    const sel = $('#taskType');
+    if (sel.options.length !== types.length) sel.innerHTML = types.map((t) => `<option value="${esc(t)}">${esc(t)}（${esc(o.config.modes[t] ?? '特殊')}）</option>`).join('');
+    const opts = people.map((x) => `<option value="${esc(x.id)}">${esc(x.name)}</option>`).join('');
+    $('#taskList').innerHTML = list.length
+      ? `<div class="wrap"><table><tr><th>任务</th><th>类型</th><th>标题</th><th>状态</th><th>尝试</th><th>持有者</th><th>用量</th><th>操作</th></tr>
+        ${list.map((t) => {
+          const round = t.attempts.find((a) => a.n === t.attempt)?.sealed_round;
+          const acts = [];
+          if (t.state === 'open') acts.push(`<select data-who="${t.id}">${opts}</select><button data-dispatch="${t.id}">派发</button>`);
+          if (t.state === 'needs_user') acts.push(`<button data-decide="${t.id}" data-to="open">重开</button>`);
+          if (t.state === 'submitted' && round) acts.push(`<button class="primary" data-reveal="${esc(round)}">揭晓 ${esc(round)}</button>`);
+          if (!['done', 'failed', 'cancelled'].includes(t.state)) acts.push(`<button data-cancel="${t.id}">取消</button>`);
+          if (t.attempt) acts.push(`<button data-packet="${t.id}">任务包</button>`);
+          return `<tr><td><code>${t.id}</code></td><td>${esc(t.type)}<div class="hint">${esc(VIS[t.visibility] ?? t.visibility)}</div></td>
+            <td>${esc(t.title)}</td><td>${badge(...(TASK_STATE[t.state] ?? [t.state, 'b-muted']))}<div class="hint">${esc(t.history.at(-1)?.reason ?? '')}</div></td>
+            <td>${t.attempt}/${t.max_attempts}</td><td class="hint">${esc(t.holder?.participant ?? '')}</td>
+            <td class="hint">${t.budget_used.calls} 次${t.budget_used.usd ? ` · $${t.budget_used.usd.toFixed(4)}` : ''}</td><td>${acts.join(' ')}</td></tr>`;
+        }).join('')}</table></div>`
+      : '<p class="hint">还没有任务。</p>';
+    const act = async (fn) => {
+      try {
+        await fn();
+      } catch (e) {
+        fail(e);
+      }
+      VIEWS.tasks();
+    };
+    for (const b of document.querySelectorAll('[data-dispatch]')) b.onclick = () => act(() => api('POST', P(`/tasks/${b.dataset.dispatch}/dispatch`), { participant: document.querySelector(`[data-who="${b.dataset.dispatch}"]`).value }));
+    for (const b of document.querySelectorAll('[data-cancel]')) b.onclick = () => act(() => api('POST', P(`/tasks/${b.dataset.cancel}/cancel`), {}));
+    for (const b of document.querySelectorAll('[data-decide]')) b.onclick = () => act(() => api('POST', P(`/tasks/${b.dataset.decide}/decide`), { to: b.dataset.to }));
+    for (const b of document.querySelectorAll('[data-reveal]')) b.onclick = () => act(() => api('POST', P(`/rounds/${encodeURIComponent(b.dataset.reveal)}/reveal`), {}));
+    for (const b of document.querySelectorAll('[data-packet]')) b.onclick = () => showPacket(b.dataset.packet).catch(fail);
+  },
+
   async inbox(items) {
-    const label = { write_fault: '写入故障：已停止接受写入，请重启服务完成恢复', external_change: '服务进程之外改过的记录文件', bad_record_file: '读不出来的记录文件', archive_failed: 'git 留档失败' };
+    const label = {
+      write_fault: '写入故障：已停止接受写入，请重启服务完成恢复', external_change: '服务进程之外改过的记录文件', bad_record_file: '读不出来的记录文件', archive_failed: 'git 留档失败',
+      task_failed: '任务失败（尝试次数用完，不再自动重派）', task_needs_user: '任务待你决定', budget_exceeded: '项目用量已到上限',
+    };
     $('#inboxList').innerHTML = items.length
       ? `<div class="wrap"><table><tr><th>类型</th><th>位置</th><th>说明</th></tr>
         ${items.map((i) => `<tr><td>${esc(label[i.type] ?? i.type)}</td><td><code>${esc(i.path ?? i.cid)}</code></td>
-          <td class="hint">${esc(i.error ?? (i.actual ? '内容与最后一次提交不一致' : i.expected ? '文件被删除' : '没有对应的提交记录'))}</td></tr>`).join('')}</table></div>
+          <td class="hint">${esc(i.reason ?? i.error ?? (i.actual ? '内容与最后一次提交不一致' : i.expected ? '文件被删除' : i.type?.startsWith('task_') ? '' : '没有对应的提交记录'))}</td></tr>`).join('')}</table></div>
         <p class="hint">外部改动不会被提交入口覆盖：涉及这些文件的晋升会被拒绝，直到处理完。处理入口在 WP4 加入。</p>`
       : '<p class="hint">没有待你决定的事项。</p>';
   },
@@ -303,6 +351,33 @@ events.onmessage = (m) => {
   if (ev.project && ev.project !== project && ev.type !== 'wb-archive') return;
   clearTimeout(pending);
   pending = setTimeout(render, 200); // 一次提交会连发好几个事件，合并成一次刷新
+};
+
+async function showPacket(id) {
+  const r = await api('GET', P(`/tasks/${id}/packet`));
+  const box = $('#taskDetail');
+  box.hidden = false;
+  box.innerHTML = `<h3>任务包 <code>${esc(r.packet.id)}</code> · ${esc(VIS[r.packet.visibility] ?? r.packet.visibility)}</h3>
+    <p class="hint">${r.packets.length} 次尝试：${r.packets.map(esc).join('、')}。下面是这次实际发送的提示词；每项输入都按内容 hash 存档，可以完整还原。</p>
+    <pre>${esc(r.prompt ?? '（外部会话认领，提示词即任务包）')}</pre>
+    <details><summary>输入（${r.inputs.length} 项）</summary>${r.inputs.map((i) => `<p><b>${esc(i.name)}</b> <span class="hint">${esc(i.ref ?? '')} ${esc(i.note ?? '')} · ${i.chars} 字 · blob ${esc(i.blob.slice(0, 12))}…</span></p>`).join('')}</details>`;
+  box.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+}
+
+$('#newTask').onsubmit = async (e) => {
+  e.preventDefault();
+  const inputs = $('#taskInputs').value.split(/[,，\s]+/).filter(Boolean).map((x) => {
+    const [id, v] = x.split('@');
+    return { id, version: Number(v) };
+  });
+  try {
+    const t = await api('POST', P('/tasks'), { type: $('#taskType').value, title: $('#taskTitle').value, goal: $('#taskGoal').value, inputs });
+    toast(`已新建任务 ${t.id}（${TASK_STATE[t.state]?.[0] ?? t.state}）`);
+    $('#taskTitle').value = $('#taskGoal').value = $('#taskInputs').value = '';
+  } catch (err) {
+    fail(err);
+  }
+  VIEWS.tasks();
 };
 
 loadProjects();
