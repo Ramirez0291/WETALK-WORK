@@ -41,8 +41,14 @@ export async function setup({ projects = ['样本'], dir, ...opts } = {}) {
   return { projectsDir, workbench, gw };
 }
 
-// 换一个新的提交入口实例读同一个目录：模拟服务重启
+// 换一个新的提交入口实例读同一个目录：模拟服务重启。
+// 先让同一目录上的旧实例把队列里的留档做完并停下——生产环境里单实例锁保证同一时间只有一个实例。
 export async function restart({ projectsDir, workbench }, opts = {}) {
+  for (const old of gateways) {
+    if (old.projectsDir !== projectsDir) continue;
+    await old.queue.idle();
+    old.stop();
+  }
   const gw = createCommitGateway({ workbench, defaults: DEFAULTS, lock: false, ...opts });
   gateways.push(gw);
   const r = await gw.start();

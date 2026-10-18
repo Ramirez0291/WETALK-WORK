@@ -16,6 +16,10 @@ const gitAvailable = (await git(os.tmpdir(), ['--version'])).ok;
 const P = '样本';
 const rec = (projectsDir, rel) => readJson(path.join(projectsDir, P, rel));
 const statusOf = (gw, id) => gw.getRecord(P, id).status;
+const quiesce = async (env) => {
+  await env.gw.queue.idle();
+  env.gw.stop();
+};
 
 // ---------- 契约二 验收案例 ----------
 
@@ -44,6 +48,7 @@ test('写完新来源后强制杀进程：重启后依赖它的论断和页面�
   await seed(env.gw);
   const changes = path.join(tmpBase(), 'changes.json');
   fs.writeFileSync(changes, JSON.stringify([{ id: 'S001', expected_version: 1, data: { title: '来源（更正版）', url: 'https://example.org/a', text: '更正后的正文' } }]));
+  await quiesce(env); // 生产环境由单实例锁保证：子进程启动前，这里的实例已经停下
   const child = spawnSync(process.execPath, [path.join(ROOT, 'tests/workbench/fixtures/crash-child.mjs'), env.projectsDir, P, 'file:0', changes], { encoding: 'utf8' });
   assert.equal(child.status, 77, child.stderr);
   // 杀进程时文件已经写了，但 applied 还没写
@@ -64,6 +69,7 @@ test('在写入文件的第 3 步中途被杀：重启后补完写入，不出�
     { id: 'S001', expected_version: 1, data: { title: '来源 v2', url: 'https://example.org/a', text: '新正文：最早见于《三五历纪》' } },
     { id: 'C001', expected_version: 1, data: { type: 'fact', text: '论断 v2', sources: [{ id: 'S001', version: 2, quote: '最早见于《三五历纪》' }] } },
   ]));
+  await quiesce(env); // 生产环境由单实例锁保证：子进程启动前，这里的实例已经停下
   const child = spawnSync(process.execPath, [path.join(ROOT, 'tests/workbench/fixtures/crash-child.mjs'), env.projectsDir, P, 'file:0', changes], { encoding: 'utf8' });
   assert.equal(child.status, 77, child.stderr);
   assert.equal(rec(env.projectsDir, 'sources/S001.json').version, 2);
@@ -86,7 +92,17 @@ test('提交流程每一步之后崩溃，重启后状态都一致，且只有�
       { id: 'S001', expected_version: 1, data: { title: 'v2', url: 'https://example.org/a', text: 'x' } },
       { id: 'C001', expected_version: 1, data: { type: 'fact', text: 'v2', sources: [{ id: 'S001', version: 2 }] } },
     ] }, { actor: HUMAN });
-    await assert.rejects(crashing.gw.promote(P, r.sid), { crash: true }, step);
+    // 清单已落盘后出错，入口会就地重做一次：只在 prepared 之后出错时重做能成功，其余步骤每次都出错，进入故障状态
+    const outcome = await crashing.gw.promote(P, r.sid).then(() => 'applied', (e) => e.status ?? 'crash');
+    // prepared 之后：就地重做成功；applied 之后：数据已经提交，请求照样算成功
+    assert.equal(outcome, ['prepared', 'applied'].includes(step) ? 'applied' : 503, step);
+    if (outcome === 503) {
+      // 故障状态下拒绝一切后续写入
+      const other = crashing.gw.receive(P, { request_id: rid(), changes: [newSource('$x', 'y')] }, { actor: HUMAN });
+      await assert.rejects(crashing.gw.promote(P, other.sid), { status: 503 }, step);
+      await assert.rejects(crashing.gw.createProject('故障中新建'), { status: 503 }, step);
+      assert.equal(crashing.gw.inbox(P)[0].type, 'write_fault', step);
+    }
     const { gw } = await restart(env);
     assert.equal(rec(env.projectsDir, 'sources/S001.json').version, 2, step);
     assert.equal(rec(env.projectsDir, 'claims/C001.json').version, 2, step);
@@ -233,6 +249,7 @@ test('服务进程之外改过的记录：进入待你决定，提交入口拒�
 test('提交日志末尾的半行被修掉，之后的追加不会接在半行后面', async () => {
   const env = await setup();
   await seed(env.gw);
+  await quiesce(env);
   fs.appendFileSync(path.join(env.projectsDir, 'commits.jsonl'), '{"cid":"0000');
   const { gw } = await restart(env);
   await submit(gw, P, [{ kind: 'source', expected_version: 0, data: { title: 'n', url: 'https://a' } }]);

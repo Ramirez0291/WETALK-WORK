@@ -172,7 +172,7 @@ const VIEWS = {
   },
 
   async inbox(items) {
-    const label = { external_change: '服务进程之外改过的记录文件', bad_record_file: '读不出来的记录文件', archive_failed: 'git 留档失败' };
+    const label = { write_fault: '写入故障：已停止接受写入，请重启服务完成恢复', external_change: '服务进程之外改过的记录文件', bad_record_file: '读不出来的记录文件', archive_failed: 'git 留档失败' };
     $('#inboxList').innerHTML = items.length
       ? `<div class="wrap"><table><tr><th>类型</th><th>位置</th><th>说明</th></tr>
         ${items.map((i) => `<tr><td>${esc(label[i.type] ?? i.type)}</td><td><code>${esc(i.path ?? i.cid)}</code></td>
@@ -193,7 +193,7 @@ async function showRecord(id) {
   box.innerHTML = `
     <h3><code>${id}</code> · ${KIND[r.kind]} · v${r.record.version}</h3>
     <div>${fresh(s)} ${verif(s)} ${blocks(s)} ${ready(s)}</div>
-    ${s.stale_reasons.length ? `<p class="hint">待更新原因：${s.stale_reasons.map((x) => x.type === 'version' ? `${x.id} 已从 v${x.based} 更新到 v${x.current}` : x.type === 'upstream' ? `上游 ${x.id} 待更新` : x.type === 'missing' ? `${x.id} 不存在` : '循环引用').join('；')}</p>` : ''}
+    ${s.stale_reasons.length ? `<p class="hint">待更新原因：${s.stale_reasons.map((x) => x.type === 'version' ? `${x.id} 已从 v${x.based} 更新到 v${x.current}` : x.type === 'upstream' ? `上游 ${x.id} 待更新` : x.type === 'missing' ? `${x.id} 不存在` : x.type === 'external' ? `正式文件在服务之外被${x.change === 'deleted' ? '删除' : '改动'}，这里显示的是已提交的内容` : '循环引用').join('；')}</p>` : ''}
     <p>上游：${s.based_on.map((b) => `${link(b.id)} v${b.version}`).join('、') || '无'}　下游：${s.downstream.map(link).join('、') || '无'}</p>
     ${r.verifications.length ? `<p>核验记录：${r.verifications.map(link).join('、')}</p>` : ''}
     ${r.objections.length ? `<p>异议：${r.objections.map(link).join('、')}</p>` : ''}

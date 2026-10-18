@@ -82,3 +82,7 @@ Desktop.ini
 # 工坊：项目资料是独立的 git 仓库；导出用的 Python 虚拟环境
 /projects/
 /.venv/
+
+# 开发用密钥文件（只在本机，绝不提交）
+/DeepSeek-devAPIKEY.txt
+*APIKEY*

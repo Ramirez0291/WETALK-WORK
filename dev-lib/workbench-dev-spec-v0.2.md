@@ -2,7 +2,7 @@
 
 Oct 18, 2026 · @LI(RAMI)LINGYUE
 
-> 本地修订（2026-10-18，WP1 评审后经主持人同意）：模块清单补 `git.mjs`、`fsx.mjs`，`templates/` 分为项目骨架与 PPT 模板；数据模型补 `provenance`（内容生产者身份）；契约二补 git 留档的字面路径与换行约定；PowerPoint 待定事项更新；修正路径笔误。线上版本尚未同步这些修订。
+> 本地修订（2026-10-18，WP1 评审后经主持人同意）：模块清单补 `git.mjs`、`fsx.mjs`，`templates/` 分为项目骨架与 PPT 模板；数据模型补 `provenance`（内容生产者身份）；契约二补 git 留档的字面路径与换行约定；PowerPoint 待定事项更新；修正路径笔误。WP2 评审后经主持人同意，再补：作品编号前缀、候选稿目录名、核验与异议的写入推迟到 WP5、inbox 提前到 WP2、projects 仓库的忽略规则、按 blob 字节留档，以及契约二的写入故障、编号不复用、正式状态取已提交快照、失效锁的接管规则。线上版本尚未同步这些修订。
 
 本文档把 claudework 多 Agent 工坊设计 V2 拆成可开发的工作包，在从 WETALK 派生的新仓库（暂名 `WETALK-WORK`）里实现。WETALK 本身保持轻便，不合入工坊功能。v0.2 根据评审补了四份核心契约（证据与核验、提交与恢复、任务与租约、上下文与可见性），状态改为由记录派生，并重排了工作包。
 
@@ -129,14 +129,16 @@ WETALK-WORK\projects          整个目录是一个 git 仓库
 | 论断 | `claims/C###.json` | type、text、sources（含 locator 与 quote）、earliest\_attestation（textual 必填） | 提交入口 |
 | 核验记录 | `verifications/V###.json` | target（论断 id@version）、source\_versions、verdict、reason、support\_quote、verifier（Agent、模型、厂商，或你） | 提交入口 |
 | 异议 | `objections/O###.json` | target、category、pointer、state、raised\_by、resolution | 提交入口 |
-| 作品 | `outline/` `script/` `slides/` | 页或节的 id、claims | 提交入口 |
+| 作品 | `outline/OL###` `script/SC###` `slides/SL###` | 页或节的 id、claims | 提交入口 |
 | 内容来源 | 每条正式记录的每个版本都带 `provenance` | 主体类型（agent / human）、参与者、实际模型与厂商、task 与 attempt、判定依据、是否已证实 | 提交入口（从服务端保存的任务尝试和调用记录派生，不采信请求里自报的身份） |
-| 候选稿 | `candidates/<任务>-<尝试>/` | 结果内容、提交时的依赖版本、request\_id | 提交入口 |
+| 候选稿 | `candidates/<sid>/`，sid = `<任务>-<尝试>-<时间>-<随机>`，主持人提交为 `H-<时间>-<随机>` | 结果内容、提交时的依赖版本、request\_id | 提交入口 |
 | 任务 | `tasks/T###.json` | 见“契约三” | 调度程序 |
 | 提交日志 | `_txn/` 与 `commits.jsonl` | 见“契约二” | 提交入口 |
 | 事件 | `events.jsonl` | 仅用于审计，只追加 | 服务进程 |
 
 **内容来源（provenance）。** 来源卡的 `author` 指文献作者，内容生产者另用 `provenance` 表示，避免同名混淆。它由提交入口从服务端保存的任务尝试、租约和调用记录派生，请求里自报的 author、model、vendor 一律不采信。重试或换模型时按新的尝试重新派生，不沿用旧身份。人类提交走受控入口，记为 human；MCP 外部会话绑定服务端登记的主体与租约，无法证实实际模型或厂商时记为 unverified，不能计入跨厂商的独立核验。人工编辑和移植补丁保留原内容的来源关系。人类核验如何计数在契约一里规定。
+
+编号一旦出现在提交日志里就永不复用，记录文件被删掉也一样，旧的 `{id, version}` 引用不会被重新解释成另一条记录。核验记录与异议的写入规则（跨厂商、人类核验计数、异议状态机、核心结论的核验份数）属于契约一，WP5 之前提交入口拒绝写入这两类记录；派生计算已按本节读取它们。
 
 **论断的派生状态**（每次读取时计算，提交者不能直接写）：
 
@@ -231,7 +233,11 @@ WETALK-WORK\projects          整个目录是一个 git 仓库
 2. 把旧版本复制到归档；
 3. 逐个文件先写临时文件再改名替换。Windows 上遇到文件被占用（EPERM / EBUSY）时重试；
 4. 在 `commits.jsonl` 追加 applied 记录，这一行就是提交成功的标志；再追加审计事件；
-5. 异步做 git 留档：只提交清单里的路径（按路径提交，不带上其他已暂存的改动），提交信息带提交编号、任务号和项目名。成功记 archived，失败记 archive\_failed 并进入重试队列。
+5. 异步做 git 留档：只提交清单里的路径（按路径提交，不带上其他已暂存的改动），提交信息带提交编号、任务号和项目名。成功记 archived，失败记 archive\_failed 并进入重试队列。留档从 blob 取确切字节、用临时索引构造提交，不经过工作区；严格按提交编号顺序进行，前面没成功后面就等着。
+
+**写入故障。** 清单落盘之后第 2–4 步出错（文件长期被占用、磁盘满等进程没有退出的情况），提交入口就地重做一次；仍然失败就进入写入故障状态，拒绝一切后续写入，直到重启时由恢复流程把这个事务做完。否则较早的失败事务会在之后被重做，覆盖掉中间已经确认成功的提交。applied 已经落盘之后的收尾出错，不影响提交成功。
+
+**正式状态取已提交的快照。** 派生计算、追溯和晋升检查都按每条记录最后一次 applied 的 blob 读取，工作区文件只用来比对。被外部改过或删掉的记录照样按已提交的内容参与计算，但本身和全部下游都算 stale；它出现在目标或依赖链（含间接上游）里时，晋升被拒绝。从没提交过的文件不是正式记录。
 
 **谁是事实来源：**
 
@@ -244,6 +250,7 @@ WETALK-WORK\projects          整个目录是一个 git 仓库
 
 **启动时的恢复规则：**
 
+- `commits.jsonl` 末尾没有换行的一行：完整的 JSON 就补上换行保留，否则截掉；内存索引与磁盘采用同一个决定；
 - 有 prepared 清单但 `commits.jsonl` 里没有 applied：按清单重做第 2–4 步。每一步都可以重复执行，完成后记 applied；
 - 已 applied 但未 archived：重新排入 git 留档队列；
 - 正式文件与最后一次 applied 清单的 hash 不一致（服务进程之外的改动）：记事件，进入“待你决定”。
@@ -251,7 +258,8 @@ WETALK-WORK\projects          整个目录是一个 git 仓库
 **其他约定：**
 
 - 界面上每次提交分开显示两个状态：数据已提交；留档已完成、待重试或失败。
-- 启动时在 projects 目录建锁文件（含进程号），发现已有存活的服务实例就拒绝启动。新建项目、晋升和 git 留档都经同一个仓库级队列，服务未运行时的命令行工具也要先取得这把锁。
+- 启动时在 projects 目录建锁文件（含进程号），发现已有存活的服务实例就拒绝启动。新建项目、晋升和 git 留档都经同一个仓库级队列，服务未运行时的命令行工具也要先取得这把锁。持有者已死时，接管必须跨进程互斥：以失效持有者的 token 为键排他地建接管目录，建成的一方再确认锁文件未变后原子替换；接管者死在半路时，下一位以它的 token 继续接管。
+- projects 仓库忽略锁、临时文件、`_txn/`、`commits.jsonl`、审计事件、候选稿、旧版本副本和 blob 目录（已留档的正文快照照样被跟踪）。git 只留正式记录的历史，不是完整备份：恢复项目要保留整个 projects 目录。
 - git 留档按字面路径提交（`--literal-pathspecs`），项目名里的方括号等字符不会被当成通配，从而带上别的项目的改动；projects 仓库关闭换行转换（`core.autocrlf=false`），并由测试按字节核对留档内容与正式文件一致。
 
 **验收案例**
@@ -436,7 +444,7 @@ WETALK-WORK\projects          整个目录是一个 git 仓库
 | GET / POST | `/api/projects` | 列出项目；从模板新建 | WP1 |
 | GET | `/` | 概况：记录数、派生状态统计、待你决定数 | WP2 |
 | GET | `/records`、`/records/:id` | 记录与派生状态；历史版本、上下游、核验与异议 | WP2 |
-| POST | `/submissions` | 收稿，存为候选稿；带 task、attempt、lease\_token、expected\_version | WP2 |
+| GET / POST | `/submissions` | 候选稿列表；收稿，存为候选稿，带 task、attempt、lease\_token、expected\_version | WP2 |
 | POST | `/submissions/:sid/promote` | 晋升为正式版本 | WP2 |
 | GET | `/commits` | 每次提交的数据状态与留档状态 | WP2 |
 | GET | `/trace/:id` | 页面 → 论断 → 来源 → 引文 | WP2 |
@@ -444,7 +452,7 @@ WETALK-WORK\projects          整个目录是一个 git 仓库
 | GET / POST | `/tasks` | 任务列表；新建或提议任务 | WP4 |
 | POST | `/tasks/:t/claim`、`/renew`、`/release`、`/cancel` | 认领、续租、释放、取消 | WP4 |
 | GET | `/tasks/:t/packet` | 任务包，含实际输入 | WP4 |
-| GET | `/inbox` | 待你决定：争议、超限任务、外部改动、留档失败 | WP4 |
+| GET | `/inbox` | 待你决定：外部改动、坏记录文件、留档失败、写入故障（WP2）；争议、超限任务（WP4 起） | WP2 / WP4 |
 | POST | `/verifications` | 提交核验记录 | WP5 |
 | POST | `/objections`、`/objections/:o/resolve` | 提交异议；你裁决 needs\_user 的异议 | WP5 |
 | POST | `/compete` | 发起竞争 | WP5 |
