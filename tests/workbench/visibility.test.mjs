@@ -75,12 +75,13 @@ test('密封起草期间，另一 Agent 的草稿不出现在任何文件、调�
   assert.deepEqual(filesContaining(env.projectsDir, 'SECRET-ALPHA-31'), []);
   assert.deepEqual(filesContaining(env.base, 'SECRET-ALPHA-31'), []); // 工作目录、沙箱目录
   assert.doesNotMatch(JSON.stringify(env.board.list(P)), /SECRET-ALPHA/);
-  assert.doesNotMatch(JSON.stringify(env.sealed.status('R1')), /SECRET-ALPHA/);
+  assert.doesNotMatch(JSON.stringify(env.sealed.status(P, 'R1')), /SECRET-ALPHA/);
+  assert.deepEqual(env.sealed.status(P, 'R1').done, [a.id]);
   const calls = env.runner.callLogOf(P).list();
   assert.equal(calls.length, 1);
   assert.doesNotMatch(JSON.stringify(env.runner.callLogOf(P).getMany(() => true)), /SECRET-ALPHA/);
   assert.equal(calls[0].sealed, true);
-  assert.throws(() => env.runner.reveal(P, 'R1'), /还有 1 份没完成/);
+  assert.throws(() => env.runner.reveal(P, 'R1'), /还不能揭晓：T002/);
   fs.writeFileSync(release, '');
   await waitFor(() => env.board.get(P, b.id).state === 'submitted');
   await env.runner.idle();
