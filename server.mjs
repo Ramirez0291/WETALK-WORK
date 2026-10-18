@@ -6,7 +6,10 @@ import { fileURLToPath } from 'node:url';
 import { createStore } from './lib/store.mjs';
 import { createCallLog } from './lib/calllog.mjs';
 import { rngFrom, normalizeSeed, shuffle, buildQueue } from './lib/schedule.mjs';
-import { runAgent, buildPrompt, parseReply, resolveCommand, listOptions, isCombined, MEMORY_MAX_CHARS, CHOICE_LABEL } from './lib/agents.mjs';
+import { runAgent, buildPrompt, parseReply, resolveCommand, listOptions, isCombined, isApiAdapter, MEMORY_MAX_CHARS, CHOICE_LABEL } from './lib/agents.mjs';
+import { createDeepseekClient, chatCost } from './lib/workbench/deepseek.mjs';
+import { createUsage } from './lib/workbench/usage.mjs';
+import { createWebTools } from './lib/workbench/web.mjs';
 import { RULES, tally, decideOutcome, buildVotePrompt, parseVote, buildDraftPrompt, parseDraft, resultText } from './lib/voting.mjs';
 import { createWorkbench, loadDefaults } from './lib/workbench/project.mjs';
 import { workbenchRoutes } from './lib/workbench/http.mjs';
@@ -27,8 +30,17 @@ const callLog = createCallLog(path.join(DATA_DIR, 'calls.jsonl')); // 每次调�
 const WB_DEFAULTS = loadDefaults(path.join(ROOT, 'workbench.defaults.json'));
 const PROJECTS_DIR = path.resolve(ROOT, process.env.WETALK_PROJECTS || WB_DEFAULTS.projectsDir);
 const workbench = createWorkbench({ projectsDir: PROJECTS_DIR, defaults: WB_DEFAULTS, templateDir: path.join(ROOT, 'templates', 'project') });
+// DeepSeek：对话、Search、Fetch 共用一个客户端；项目用量与来源可获取性记在各项目的账本里
+const deepseek = createDeepseekClient({ baseUrl: process.env.WETALK_DEEPSEEK_URL || WB_DEFAULTS.deepseek.baseUrl, retry: WB_DEFAULTS.retry });
+const usage = createUsage({ workbench, pricing: WB_DEFAULTS.pricing });
 // 提交入口：启动时取得项目目录的单实例锁并做崩溃恢复，之后它是正式区唯一的写入者
-const gateway = createCommitGateway({ workbench, defaults: WB_DEFAULTS, onEvent: (ev) => broadcast({ ...ev, type: `wb-${ev.type}` }) });
+const gateway = createCommitGateway({
+  workbench,
+  defaults: WB_DEFAULTS,
+  onEvent: (ev) => broadcast({ ...ev, type: `wb-${ev.type}` }),
+  availabilityOf: (p) => usage.availabilityOf(p),
+});
+const web = createWebTools({ client: deepseek, usage, gateway, workbench, perSecond: WB_DEFAULTS.deepseek.webPerSecond, timeoutMs: WB_DEFAULTS.deepseek.timeoutSec * 1000 });
 let workbenchStart;
 try {
   workbenchStart = await gateway.start();
@@ -42,7 +54,9 @@ gateway.startArchiveRetry();
 // 主持人入口的令牌：每次启动重新生成，只出现在工坊页面里
 const HOST_TOKEN = crypto.randomBytes(24).toString('hex');
 
-const participants = config.participants.map((p) => ({ ...p, resolved: resolveCommand(p.command) }));
+// API 参与者（DeepSeek）没有命令行，有密钥就算可用
+const resolveParticipant = (p) => (isApiAdapter(p) ? (process.env.DEEPSEEK_API_KEY ? 'DeepSeek API（DEEPSEEK_API_KEY）' : null) : resolveCommand(p.command));
+const participants = config.participants.map((p) => ({ ...p, resolved: resolveParticipant(p) }));
 const publicParticipant = (p) => ({
   id: p.id,
   name: p.name,
@@ -166,16 +180,29 @@ function newCall({ thread, p, purpose, s, mem, mode, extra = {} }) {
   };
 }
 
+// 调用记录里的用量：DeepSeek 按价目估算美元；Claude 记录 CLI 报告的 modelUsage 与费用
+function usageOf(p, usage, model) {
+  if (!usage) return null;
+  if (isApiAdapter(p)) {
+    const cost = chatCost(usage, model, WB_DEFAULTS.pricing);
+    return { ...usage, usd: cost.usd, usdEstimated: cost.estimated, peak: cost.peak };
+  }
+  return usage;
+}
+
 async function invoke(call, p, prompt, signal) {
   call.prompt = prompt;
   try {
-    const r = await runAgent(p, prompt, agentOpts(signal));
+    const r = await runAgent(p, prompt, { ...agentOpts(signal), deepseek });
     call.exec = r.exec;
     call.raw = r.raw;
     call.reported = { model: r.model ?? null, effort: r.effort ?? null };
+    if (r.reasoning) call.reasoning = r.reasoning;
+    call.usage = usageOf(p, r.usage, r.model);
     return r;
   } catch (e) {
     call.exec = e.details?.exec ?? null;
+    if (e.details?.usage) call.usage = usageOf(p, e.details.usage, p.model);
     throw e;
   }
 }
@@ -1120,7 +1147,7 @@ const routes = [
     return publicParticipant(p);
   }],
 
-  ...workbenchRoutes({ workbench, gateway, readJson, hostToken: HOST_TOKEN, humanName: config.humanName }),
+  ...workbenchRoutes({ workbench, gateway, web, usage, readJson, hostToken: HOST_TOKEN, humanName: config.humanName }),
 ];
 
 const server = http.createServer(async (req, res) => {

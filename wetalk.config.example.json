@@ -36,6 +36,14 @@
         "agy",
         "%LOCALAPPDATA%\\agy\\bin\\agy.exe"
       ]
+    },
+    {
+      "id": "deepseek",
+      "name": "DeepSeek",
+      "color": "#4D6BFE",
+      "adapter": "deepseek",
+      "model": "deepseek-flash",
+      "effort": "high"
     }
   ]
 }

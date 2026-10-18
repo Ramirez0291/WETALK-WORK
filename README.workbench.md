@@ -40,6 +40,22 @@ npm start
 - 服务进程之外改过或删掉的记录文件不会被采纳：页面和追溯显示的仍是已提交的内容，它和下游标为待更新，涉及它的晋升被拒绝。
 - **git 不是完整备份。** 提交日志、候选稿、旧版本副本和 blob 不进 git。备份或迁移项目时，要保留整个 `projects/` 目录。
 
+## DeepSeek（WP3）
+
+- 密钥只从环境变量 `DEEPSEEK_API_KEY` 读取，不写进任何配置文件。PowerShell 里：
+
+  ```powershell
+  $env:DEEPSEEK_API_KEY = (Get-Content .\DeepSeek-devAPIKEY.txt -Raw).Trim(); npm start
+  ```
+
+  开发用密钥文件已被 `.gitignore` 忽略，不要提交。
+- 研讨室参与者：在 `wetalk.config.json` 里加 `{"id":"deepseek","name":"DeepSeek","adapter":"deepseek","model":"deepseek-flash","effort":"high"}`（`effort` 可选 none / low / high / max）。它走 API，没有命令行；有密钥就显示为可用，“停止”同样能中断。调用记录里有 `usage`（token 与按价目估算的美元）和每次尝试的状态。
+- 重试：408、429、5xx 和网络错误按 `retry.delaysSec` 退避（有 `Retry-After` 时优先），其他 4xx 不重试。`deepseek.timeoutSec` 是整次调用（含重试）的总时限。
+- 工坊接口：`POST /api/projects/:p/web/search`（只给线索，结果不能作为引文）、`POST /api/projects/:p/web/fetch`（`{url, source_id?, create?}`，正文存成来源快照）、`GET /api/projects/:p/usage`、`POST /api/projects/:p/sources/:id/availability`（主持人确认来源已不存在）。
+- 用量账本 `projects/<项目>/usage.jsonl` 记每一次尝试（含失败与重试），项目的调用次数与费用上限（`budget`）按它累计；到上限后新调用和重试都被拒绝。费用要等返回才知道，最后一次调用可能略超费用上限。
+- 价目在 `workbench.defaults.json` 的 `pricing`（高峰价，低谷按 `offPeakFactor` 折算；不识别中国节假日，一律按高峰估算，宁可高估）。价格变了改这里。
+- 来源正文只有两个来处：Fetch 快照，或主持人在工坊页面手工录入。论断的引文必须能在所引来源版本的正文快照里找到（忽略 Markdown 的标点转义和空白重排），否则不能晋升。
+
 ## 新建项目
 
 ```bash
@@ -67,6 +83,7 @@ npm run new-project 项目名
 | --- | --- |
 | Node.js 18+ | 服务与测试 |
 | git | `projects/` 的自动留档（不可用时数据照常提交，只是没有留档） |
+| DeepSeek API | 对话、Search、Fetch（Node 自带 fetch，没有 npm 依赖）；需要环境变量 `DEEPSEEK_API_KEY` |
 
 后续工作包引入的依赖（例如 PPT 导出用的 python-pptx）会在这里逐项写明用途。
 

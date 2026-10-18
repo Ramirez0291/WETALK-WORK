@@ -232,7 +232,7 @@ function sourceHtml(s) {
         : `<div class="quote">${badge('没有正文快照，无法核对', 'b-muted')} ${esc(s.quote)}</div>`;
   }
   return `<div class="node"><div class="head"><code>${s.id}</code> ${verTag(s)} <b>${esc(s.title)}</b>
-    ${s.availability && s.availability !== 'available' ? badge(s.availability === 'gone' ? '来源已不存在' : '暂不可获取', 'b-warn') : ''}</div>
+    ${s.availability === 'gone' ? badge('来源已不存在', 'b-bad') : s.availability === 'temporarily_unavailable' ? badge('暂不可获取（快照仍可用）', 'b-warn') : ''}</div>
     <div class="hint">${esc(s.citation ?? '')} ${s.url ? `<a href="${esc(s.url)}" target="_blank" rel="noreferrer">${esc(s.url)}</a>` : ''} ${s.locator ? `· 位置：${esc(s.locator)}` : ''}</div>${q}</div>`;
 }
 

@@ -321,9 +321,9 @@ test('追溯：从一页 PPT 到论断、来源和原文位置；按引用时的
   assert.equal(t2.root.status.freshness, 'stale');
   // 从来源反查下游
   assert.deepEqual(env.gw.trace(P, 'S001').downstream, [{ id: 'C001', downstream: ['SL001'] }]);
-  // 引文在正文里找不到
-  await submit(env.gw, P, [{ kind: 'claim', expected_version: 0, data: { type: 'fact', text: 'y', sources: [{ id: 'S001', version: 2, quote: '不存在的引文' }] } }]);
-  assert.equal(env.gw.trace(P, 'C002').root.sources[0].quote_found, false);
+  // 引文在正文快照里找不到：晋升时就被拒绝（契约一第一步的 quote 指针检查，WP3 起）
+  const r = env.gw.receive(P, { request_id: rid(), changes: [{ kind: 'claim', expected_version: 0, data: { type: 'fact', text: 'y', sources: [{ id: 'S001', version: 2, quote: '不存在的引文' }] } }] }, { actor: HUMAN });
+  await assert.rejects(env.gw.promote(P, r.sid), (e) => e.details.reasons[0].type === 'quote_not_found');
 });
 
 test('概况统计', async () => {

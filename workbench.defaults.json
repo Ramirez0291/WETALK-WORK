@@ -11,35 +11,131 @@
     "causal_explanation": "adversarial",
     "key_number": "adversarial"
   },
-  "compete": { "drafts": 2 },
-  "verify": { "coreClaimVerifiers": 2, "otherClaimVerifiers": 1 },
-  "evidence": { "maxAttempts": 2 },
-  "reader": { "default": "audience", "addReviewerFor": ["disputed_fact", "disputed_number"] },
-  "rounds": null,
-  "lease": { "minutes": 30 },
-  "cooldown": { "apiSeconds": 60, "cliMinutes": 60 },
-  "retry": { "max": 3, "delaysSec": [2, 4, 8] },
-  "task": { "maxAttempts": 3, "maxDepth": 3 },
-  "budget": { "calls": 300, "apiUsd": 10 },
-  "routing": {
-    "extract": ["deepseek"],
-    "summarize": ["deepseek"],
-    "outline": ["claude", "codex"],
-    "key_writing": ["claude", "codex"],
-    "verify": ["different_vendor"],
-    "search": ["deepseek"]
+  "compete": {
+    "drafts": 2
   },
-  "memory": { "loadByDefault": ["conventions", "shared"] },
-  "plateau": { "rounds": 1, "action": "audience_reader" },
-  "slides": { "maxCharsPerPage": 100 },
-  "offPeak": { "defer": false },
-  "git": { "autoCommit": true },
+  "verify": {
+    "coreClaimVerifiers": 2,
+    "otherClaimVerifiers": 1
+  },
+  "evidence": {
+    "maxAttempts": 2
+  },
+  "reader": {
+    "default": "audience",
+    "addReviewerFor": [
+      "disputed_fact",
+      "disputed_number"
+    ]
+  },
+  "rounds": null,
+  "lease": {
+    "minutes": 30
+  },
+  "cooldown": {
+    "apiSeconds": 60,
+    "cliMinutes": 60
+  },
+  "retry": {
+    "max": 3,
+    "delaysSec": [
+      2,
+      4,
+      8
+    ]
+  },
+  "task": {
+    "maxAttempts": 3,
+    "maxDepth": 3
+  },
+  "budget": {
+    "calls": 300,
+    "apiUsd": 10
+  },
+  "routing": {
+    "extract": [
+      "deepseek"
+    ],
+    "summarize": [
+      "deepseek"
+    ],
+    "outline": [
+      "claude",
+      "codex"
+    ],
+    "key_writing": [
+      "claude",
+      "codex"
+    ],
+    "verify": [
+      "different_vendor"
+    ],
+    "search": [
+      "deepseek"
+    ]
+  },
+  "memory": {
+    "loadByDefault": [
+      "conventions",
+      "shared"
+    ]
+  },
+  "plateau": {
+    "rounds": 1,
+    "action": "audience_reader"
+  },
+  "slides": {
+    "maxCharsPerPage": 100
+  },
+  "offPeak": {
+    "defer": false
+  },
+  "git": {
+    "autoCommit": true
+  },
   "export": {
-    "formats": ["md", "pptx"],
+    "formats": [
+      "md",
+      "pptx"
+    ],
     "via": "script",
     "template": null,
     "skill": null,
     "python": ".venv\\Scripts\\python.exe"
   },
-  "render": { "engine": "auto" }
+  "render": {
+    "engine": "auto"
+  },
+  "deepseek": {
+    "baseUrl": "https://api.deepseek.com",
+    "timeoutSec": 600,
+    "webPerSecond": 5
+  },
+  "pricing": {
+    "_comment": "美元，每 100 万 token 的高峰价；低谷按 offPeakFactor 折算。来源：api-docs.deepseek.com/quick_start/pricing（2026-10-18）。价格以官方价目为准，变了就改这里。",
+    "models": {
+      "deepseek-flash": {
+        "cacheHit": 0.006,
+        "cacheMiss": 0.3,
+        "output": 1.2
+      },
+      "deepseek-v4-pro": {
+        "cacheHit": 0.044,
+        "cacheMiss": 1.32,
+        "output": 3.96
+      }
+    },
+    "offPeakFactor": 0.5,
+    "peakHoursUtc": [
+      [
+        1,
+        4
+      ],
+      [
+        6,
+        10
+      ]
+    ],
+    "webUsdPerRequest": 0.00075
+  }
 }
