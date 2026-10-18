@@ -637,7 +637,7 @@ test('二轮 R3: 迁址失败不改变来源现地址的可获取性；迁址成
   // 插队：上面那个慢请求已经占了 /v1/tools/fetch 的第一项，新脚本排在它后面
   const moved = await env.web.fetch(P, { source_id: 'S001', url: 'https://example.org/B', relocate: true }, { actor: HUMAN });
   assert.equal(moved.source.relocated, true);
-  await slowOld; // 旧地址请求晚到（成功或因版本变化失败都一样）
+  await slowOld; // 旧地址请求晚到并成功（失败的情况见下面的专门用例）
   r = env.gw.getRecord(P, 'S001');
   assert.equal(r.record.url, 'https://example.org/B');
   assert.equal(r.availability.state, 'available');
@@ -678,4 +678,59 @@ test('二轮 R4: 第一版单行格式的账本照样计数计费、保留抓取
   assert.equal(u.availabilityOf(P, { urlOf: () => 'https://example.org/A' }).get('S001').state, 'temporarily_unavailable');
   assert.throws(() => u.availabilityOf(P), /urlOf/);
   assert.deepEqual([u.totals(P).calls, u.totals(P).usd], [2, 0.001]);
+});
+
+// ---------- WP3 第三轮评审的维护项 ----------
+
+test('限速器：队列再长，待触发的唤醒定时器也至多一个；FIFO、取消与 QPS 照旧', async () => {
+  let t = 0;
+  const timers = [];
+  const schedule = (fn, ms) => {
+    const h = { at: t + ms, fn };
+    timers.push(h);
+    return h;
+  };
+  const limiter = createRateLimiter(5, { now: () => t, schedule });
+  const order = [];
+  const ac = new AbortController();
+  const all = Array.from({ length: 105 }, (_, i) =>
+    limiter.take(i === 50 ? ac.signal : undefined).then(() => order.push({ i, t }), () => order.push({ i, cancelled: true })));
+  await new Promise((r) => setImmediate(r));
+  ac.abort(new Error('取消第 51 个'));
+  let peak = timers.length;
+  let fired = 0;
+  while (timers.length) {
+    peak = Math.max(peak, timers.length);
+    timers.sort((a, b) => a.at - b.at);
+    const h = timers.shift();
+    t = h.at;
+    fired++;
+    h.fn();
+    await new Promise((r) => setImmediate(r));
+  }
+  await Promise.all(all);
+  assert.equal(peak, 1);
+  assert.ok(fired <= 21, `唤醒了 ${fired} 次`);
+  const granted = order.filter((o) => !o.cancelled);
+  assert.equal(granted.length, 104);
+  assert.deepEqual(granted.map((o) => o.i), [...Array(105).keys()].filter((i) => i !== 50)); // 先来后到
+  for (let k = 5; k < granted.length; k++) assert.ok(granted[k].t - granted[k - 5].t >= 1000);
+});
+
+test('迁址成功后，迁址前发出的旧地址请求晚到并失败（404）：来源仍按新地址判为可用', async () => {
+  const env = await webEnv();
+  mock.script('/v1/tools/fetch', { body: { title: 'A', content: 'A 的正文' } });
+  await env.web.fetch(P, { url: 'https://example.org/A', create: true });
+  // 旧请求要在迁址真正完成（含排在队列里的 git 留档）之后才返回，所以给足延迟
+  mock.script('/v1/tools/fetch', { ...apiError(404), delayMs: 2500 });
+  const slowOld = env.web.fetch(P, { source_id: 'S001' }).then(() => null, (e) => e);
+  await new Promise((r) => setTimeout(r, 50));
+  mock.script('/v1/tools/fetch', { body: { title: 'B', content: 'B 的正文' } });
+  await env.web.fetch(P, { source_id: 'S001', url: 'https://example.org/B', relocate: true }, { actor: HUMAN });
+  assert.equal(env.gw.getRecord(P, 'S001').record.url, 'https://example.org/B'); // 迁址已完成，旧请求还没回来
+  const late = await slowOld;
+  assert.equal(late.status, 404);
+  assert.equal(late.details.availability.state, 'available'); // 错误详情也按当前地址 B
+  const r = env.gw.getRecord(P, 'S001');
+  assert.deepEqual([r.record.url, r.availability.state], ['https://example.org/B', 'available']);
 });

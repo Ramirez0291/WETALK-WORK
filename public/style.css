@@ -53,6 +53,8 @@ button, input, textarea, select { font: inherit; color: inherit; }
 .brand-mark { font-size: 28px; color: var(--accent); line-height: 1; }
 .brand-name { font: 600 20px/1.2 var(--serif); letter-spacing: 0.5px; }
 .brand-sub { font-size: 12px; color: var(--muted); }
+.workbench-link { display: block; padding: 2px 4px 0; text-decoration: none; }
+.workbench-link:hover { color: var(--accent); }
 .language-picker { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 0 4px; font-size: 13px; color: var(--muted); }
 .language-picker select { max-width: 155px; }
 .thread-list { flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 2px; margin: 0 -4px; }

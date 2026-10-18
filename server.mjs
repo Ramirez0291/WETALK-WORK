@@ -740,9 +740,10 @@ function resolveSpace(input) {
   return space.id;
 }
 
+// 工坊是主页面；研讨室挪到 /talk（/workbench 保留为工坊的别名）
 const STATIC = {
-  '/': 'index.html', '/app.js': 'app.js', '/style.css': 'style.css', '/i18n.js': 'i18n.js', '/locales/en.js': 'locales/en.js',
-  '/workbench': 'workbench.html', '/workbench.js': 'workbench.js', '/workbench.css': 'workbench.css',
+  '/': 'workbench.html', '/workbench': 'workbench.html', '/workbench.js': 'workbench.js', '/workbench.css': 'workbench.css',
+  '/talk': 'index.html', '/app.js': 'app.js', '/style.css': 'style.css', '/i18n.js': 'i18n.js', '/locales/en.js': 'locales/en.js',
 };
 const MIME = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.svg': 'image/svg+xml' };
 const staticFile = (pathname) =>
@@ -1181,7 +1182,7 @@ const server = http.createServer(async (req, res) => {
       if (!fs.existsSync(file)) throw new HttpError(404, '文件不存在');
       res.writeHead(200, { 'Content-Type': `${MIME[path.extname(file)]}; charset=utf-8`, 'Cache-Control': 'no-store' });
       // 工坊页面里填入主持人入口令牌
-      if (url.pathname === '/workbench') return res.end(fs.readFileSync(file, 'utf8').replace('__WB_HOST_TOKEN__', HOST_TOKEN));
+      if (path.basename(file) === 'workbench.html') return res.end(fs.readFileSync(file, 'utf8').replace('__WB_HOST_TOKEN__', HOST_TOKEN));
       return fs.createReadStream(file).pipe(res);
     }
 
@@ -1197,9 +1198,8 @@ const server = http.createServer(async (req, res) => {
 });
 
 server.listen(PORT, HOST, () => {
-  console.log(`\nWeTalk 研讨室已启动：http://localhost:${PORT}\n`);
+  console.log(`\nWETALK 工坊已启动：http://localhost:${PORT}/\n研讨室：http://localhost:${PORT}/talk\n`);
   for (const p of participants) console.log(`  ${p.resolved ? '✓' : '✗'} ${p.name.padEnd(12)} ${p.resolved || '（未找到命令，自动发言不可用）'}`);
-  console.log(`\n工坊：http://localhost:${PORT}/workbench`);
   console.log(`工坊项目目录：${PROJECTS_DIR}${workbenchStart.init.git ? '' : `（git 不可用，暂不留档：${workbenchStart.init.gitError}）`}`);
   const { redone, dropped } = workbenchStart.recovered;
   if (redone.length || dropped.length) console.log(`崩溃恢复：重做 ${redone.length} 个未完成的提交，丢弃 ${dropped.length} 个未写完的清单`);

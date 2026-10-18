@@ -265,6 +265,7 @@ export default {
   "与服务器断开，重连中…": "Disconnected; reconnecting…",
   "{0} 发言失败：{1}": "{0} could not respond: {1}",
   "人与 AI 的研讨室": "A discussion room for people and AI",
+  "← 回到工坊": "← Back to the workbench",
   "＋ 新议题": "＋ New topic",
   "📓 记忆本": "📓 Notebooks",
   "连接中…": "Connecting…",

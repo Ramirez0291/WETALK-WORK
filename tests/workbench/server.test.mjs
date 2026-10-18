@@ -29,7 +29,7 @@ async function startServer() {
   await new Promise((resolve, reject) => {
     const t = setTimeout(() => reject(new Error(`服务没有启动：${out}`)), 15_000);
     child.stdout.on('data', () => {
-      if (out.includes('研讨室已启动')) {
+      if (out.includes('工坊已启动')) {
         clearTimeout(t);
         resolve();
       }

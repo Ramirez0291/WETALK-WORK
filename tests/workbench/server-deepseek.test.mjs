@@ -40,7 +40,7 @@ before(async () => {
   server.stderr.on('data', (d) => (out += d));
   await new Promise((resolve, reject) => {
     const t = setTimeout(() => reject(new Error(`服务没有启动：${out}`)), 15_000);
-    server.stdout.on('data', () => out.includes('研讨室已启动') && (clearTimeout(t), resolve()));
+    server.stdout.on('data', () => out.includes('工坊已启动') && (clearTimeout(t), resolve()));
     server.on('exit', (code) => (clearTimeout(t), reject(new Error(`服务退出（${code}）：${out}`))));
   });
 });
