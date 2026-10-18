@@ -43,7 +43,7 @@ const gateway = createCommitGateway({
   workbench,
   defaults: WB_DEFAULTS,
   onEvent: (ev) => broadcast({ ...ev, type: `wb-${ev.type}` }),
-  availabilityOf: (p) => usage.availabilityOf(p),
+  availabilityOf: (p, urlOf) => usage.availabilityOf(p, { urlOf }),
 });
 const web = createWebTools({ client: deepseek, usage, gateway, workbench, timeoutMs: WB_DEFAULTS.deepseek.timeoutSec * 1000 });
 let workbenchStart;

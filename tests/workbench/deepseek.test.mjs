@@ -150,7 +150,7 @@ async function projectEnv(budget, override = {}) {
   fs.writeFileSync(path.join(env.projectsDir, P, 'protocol.json'), JSON.stringify({ retry: { max: 3, delaysSec: [0.01, 0.02, 0.03] }, ...(budget ? { budget } : {}), ...override }));
   const usage = createUsage({ workbench: env.workbench, pricing: DEFAULTS.pricing, now: () => new Date('2026-10-19T12:00:00Z') });
   // 和 server.mjs 一样把来源可获取性接进提交入口
-  const { gw } = await restart(env, { availabilityOf: (p) => usage.availabilityOf(p) });
+  const { gw } = await restart(env, { availabilityOf: (p, urlOf) => usage.availabilityOf(p, { urlOf }) });
   return { ...env, gw, usage };
 }
 
@@ -183,18 +183,24 @@ test('费用上限：成功调用按价目记账，累计到上限后拒绝', as
 // ---------- 限速 ----------
 
 test('Search / Fetch 限速：1 秒内最多 5 次，第 6 次等到最早那次满 1 秒', async () => {
+  // 假时钟：定时器一到就把时间拨到触发时刻
   let t = 0;
-  const waits = [];
-  const limiter = createRateLimiter(5, { now: () => t, sleep: async (ms) => { waits.push(ms); t += ms; } });
+  const timers = [];
+  const schedule = (fn, ms) => timers.push({ at: t + ms, fn });
+  const limiter = createRateLimiter(5, { now: () => t, schedule });
   const starts = [];
-  for (let i = 0; i < 7; i++) {
-    await limiter.take();
-    starts.push(t);
-    t += 10;
+  const all = Array.from({ length: 7 }, () => limiter.take().then(() => starts.push(t)));
+  await new Promise((r) => setImmediate(r));
+  while (timers.length) {
+    timers.sort((x, y) => x.at - y.at);
+    const next = timers.shift();
+    t = next.at;
+    next.fn();
+    await new Promise((r) => setImmediate(r));
   }
-  assert.deepEqual(starts.slice(0, 5), [0, 10, 20, 30, 40]);
-  assert.ok(starts[5] >= 1000 && starts[6] >= 1010);
-  for (let i = 5; i < 7; i++) assert.ok(starts.slice(i - 5, i + 1).at(-1) - starts[i - 5] >= 1000);
+  await Promise.all(all);
+  assert.deepEqual(starts.slice(0, 5), [0, 0, 0, 0, 0]);
+  assert.ok(starts[5] >= 1000 && starts[6] >= 1000);
 });
 
 // ---------- Search / Fetch 与来源快照 ----------
@@ -285,11 +291,12 @@ test('主持人确认来源已不存在（gone）：之后抓取成功也不改�
   const env = await webEnv();
   mock.script('/v1/tools/fetch', { body: PAGE }, { body: PAGE });
   await env.web.fetch(P, { url: 'https://example.org/sanwu', create: true });
-  env.usage.mark(P, 'S001', 'gone', { by: '主持人' });
+  const url = env.gw.getRecord(P, 'S001').record.url;
+  env.usage.mark(P, 'S001', 'gone', { by: '主持人', url });
   assert.equal(env.gw.getRecord(P, 'S001').availability.state, 'gone');
   await env.web.fetch(P, { url: 'https://example.org/sanwu', source_id: 'S001' });
   assert.equal(env.gw.getRecord(P, 'S001').availability.state, 'gone');
-  env.usage.mark(P, 'S001', 'available', { by: '主持人' });
+  env.usage.mark(P, 'S001', 'available', { by: '主持人', url });
   assert.equal(env.gw.getRecord(P, 'S001').availability.state, 'available');
 });
 
@@ -392,13 +399,12 @@ test('R2: 迁址只能由主持人显式进行，地址与正文一起更新；�
   // B 失败只影响 S001（地址绑定的抓取），S002 不受影响
   mock.script('/v1/tools/fetch', apiError(404));
   await assert.rejects(env.web.fetch(P, { source_id: 'S001' }), { status: 404 });
-  const av = env.usage.availabilityOf(P);
-  assert.equal(av.get('S001').state, 'temporarily_unavailable');
-  assert.equal(av.has('S002'), false);
+  assert.equal(env.gw.getRecord(P, 'S001').availability.state, 'temporarily_unavailable');
+  assert.equal(env.gw.getRecord(P, 'S002').availability.state, 'unknown');
   // 不绑定来源卡的抓取，失败不计入任何来源
   mock.script('/v1/tools/fetch', apiError(404));
   await assert.rejects(env.web.fetch(P, { url: 'https://example.org/A' }), { status: 404 });
-  assert.equal(env.usage.availabilityOf(P).size, 1);
+  assert.equal(env.gw.getRecord(P, 'S001').availability.state, 'temporarily_unavailable');
 });
 
 test('R3: 账户限速按每次物理请求执行：并发首发与重试交错时，任意 1 秒内都不超过 5 次', async () => {
@@ -539,4 +545,137 @@ test('正文快照登记：text_blob 只能指向登记过的快照，记录 JSO
   const blob = env.gw.getRecord(P, 'S003').record.text_blob;
   const { snapshotInfo } = await import('../../lib/workbench/snapshots.mjs');
   assert.deepEqual([snapshotInfo(path.join(env.projectsDir, P), blob).origin, snapshotInfo(path.join(env.projectsDir, P), blob).by], ['manual', '主持人']);
+});
+
+// ---------- WP3 第二轮评审（R1–R4）的回归用例 ----------
+
+test('二轮 R1: 排在别的等待者后面的请求，到自己的时限或被中止就立即离队，不占名额、不打乱后面的顺序', async () => {
+  const limiter = createRateLimiter(5);
+  await Promise.all(Array.from({ length: 5 }, () => limiter.take()));
+  const head = limiter.take(); // 队首：要等到满 1 秒
+  let sent = 0;
+  const c = createDeepseekClient({ apiKey: 'sk-test', rateLimits: { search: limiter }, fetchImpl: async () => { sent++; throw new Error('不该发出'); } });
+  const t0 = Date.now();
+  await assert.rejects(c.search({ query: 'x' }, { timeoutMs: 50 }), { kind: 'timeout' });
+  assert.ok(Date.now() - t0 < 300, `超时用了 ${Date.now() - t0}ms`);
+  const ac = new AbortController();
+  const aborted = c.search({ query: 'y' }, { signal: ac.signal });
+  setTimeout(() => ac.abort(), 30);
+  const t1 = Date.now();
+  await assert.rejects(aborted, { kind: 'aborted' });
+  assert.ok(Date.now() - t1 < 300);
+  assert.equal(sent, 0);
+  // 离队的节点不占名额：队首拿到之后，紧接着排队的人在同一个 1 秒窗口里还能拿到剩下的名额
+  const later = limiter.take();
+  await head;
+  const t2 = Date.now();
+  await later;
+  assert.ok(Date.now() - t2 < 100);
+  assert.equal(limiter.waiting(), 0);
+});
+
+test('二轮 R2: 收到响应头后正文断连，按配置的非零间隔退避，waitMs 是数字', async () => {
+  const http = await import('node:http');
+  for (const status of [200, 503]) {
+    const starts = [];
+    const srv = http.createServer(async (req, res) => {
+      for await (const _ of req) void _;
+      starts.push(Date.now());
+      res.writeHead(status, { 'Content-Type': 'application/json' });
+      if (starts.length === 1) {
+        res.write(status === 200 ? '\n' : '{"error":');
+        return setTimeout(() => res.destroy(), 20);
+      }
+      res.end(JSON.stringify({ results: [] }));
+    });
+    await new Promise((r) => srv.listen(0, '127.0.0.1', r));
+    try {
+      const c = createDeepseekClient({ apiKey: 'sk-test', baseUrl: `http://127.0.0.1:${srv.address().port}`, retry: { max: 1, delaysSec: [0.3] } });
+      const r = await c.search({ query: 'x' }).catch((e) => e);
+      const attempts = r.attempts ?? r.details.attempts;
+      assert.equal(typeof attempts[0].waitMs, 'number', String(status));
+      assert.equal(attempts[0].waitMs, 300, String(status));
+      assert.ok(starts[1] - starts[0] >= 290, `${status}：两次请求相隔 ${starts[1] - starts[0]}ms`);
+    } finally {
+      srv.closeAllConnections();
+      await new Promise((r) => srv.close(r));
+    }
+  }
+});
+
+test('二轮 R3: 迁址失败不改变来源现地址的可获取性；迁址成功后只认新地址；迁址前在途的旧地址结果晚到也不算', async () => {
+  const env = await webEnv();
+  mock.script('/v1/tools/fetch', { body: { title: 'A', content: 'A 的正文' } }, { body: { title: 'A', content: 'A 的正文' } });
+  await env.web.fetch(P, { url: 'https://example.org/A', create: true });
+  await env.web.fetch(P, { source_id: 'S001' });
+  assert.equal(env.gw.getRecord(P, 'S001').availability.state, 'available');
+  // 迁往 B 失败：S001 仍是 v1、地址 A、可获取性不变；失败记录照样留在账本里（带 B 的地址）
+  mock.script('/v1/tools/fetch', apiError(404));
+  await assert.rejects(env.web.fetch(P, { source_id: 'S001', url: 'https://example.org/B', relocate: true }, { actor: HUMAN }), { status: 404 });
+  let r = env.gw.getRecord(P, 'S001');
+  assert.deepEqual([r.record.version, r.record.url, r.availability.state], [1, 'https://example.org/A', 'available']);
+  assert.deepEqual([env.usage.entries(P).at(-1).url, env.usage.entries(P).at(-1).ok], ['https://example.org/B', false]);
+  // 迁往 B 抓取成功、但晋升时版本冲突：来源仍指向 A，B 的成功也不算 A 的
+  mock.script('/v1/tools/fetch', apiError(404), { body: { title: 'B', content: 'B 的正文' } });
+  await assert.rejects(env.web.fetch(P, { source_id: 'S001' }), { status: 404 }); // 先让 A 变成暂不可获取
+  const realPromote = env.gw.promote;
+  env.gw.promote = async () => {
+    throw Object.assign(new Error('版本冲突'), { status: 409 });
+  };
+  try {
+    await assert.rejects(env.web.fetch(P, { source_id: 'S001', url: 'https://example.org/B', relocate: true }, { actor: HUMAN }), { status: 409 });
+  } finally {
+    env.gw.promote = realPromote;
+  }
+  r = env.gw.getRecord(P, 'S001');
+  assert.deepEqual([r.record.url, r.availability.state], ['https://example.org/A', 'temporarily_unavailable']);
+  // 迁址成功，同时有一个迁址前发出的旧地址请求晚到并失败：S001 只看新地址 B 的结果
+  mock.script('/v1/tools/fetch', { body: { title: 'A', content: 'A 的正文' }, delayMs: 300 });
+  const slowOld = env.web.fetch(P, { source_id: 'S001' }).catch((e) => e);
+  await new Promise((res) => setTimeout(res, 50));
+  mock.script('/v1/tools/fetch', { body: { title: 'B', content: 'B 的正文' } });
+  // 插队：上面那个慢请求已经占了 /v1/tools/fetch 的第一项，新脚本排在它后面
+  const moved = await env.web.fetch(P, { source_id: 'S001', url: 'https://example.org/B', relocate: true }, { actor: HUMAN });
+  assert.equal(moved.source.relocated, true);
+  await slowOld; // 旧地址请求晚到（成功或因版本变化失败都一样）
+  r = env.gw.getRecord(P, 'S001');
+  assert.equal(r.record.url, 'https://example.org/B');
+  assert.equal(r.availability.state, 'available');
+  // 新地址失败才影响 S001
+  mock.script('/v1/tools/fetch', apiError(404));
+  await assert.rejects(env.web.fetch(P, { source_id: 'S001' }), { status: 404 });
+  assert.equal(env.gw.getRecord(P, 'S001').availability.state, 'temporarily_unavailable');
+  // 主持人的确认针对确认时的地址
+  env.usage.mark(P, 'S001', 'gone', { by: '主持人', url: 'https://example.org/A' });
+  assert.equal(env.gw.getRecord(P, 'S001').availability.state, 'temporarily_unavailable');
+  env.usage.mark(P, 'S001', 'gone', { by: '主持人', url: 'https://example.org/B' });
+  assert.equal(env.gw.getRecord(P, 'S001').availability.state, 'gone');
+});
+
+test('二轮 R4: 第一版单行格式的账本照样计数计费、保留抓取历史；与新格式混合、连续重启合计不变', async () => {
+  const env = await projectEnv({ calls: 3, apiUsd: 1 });
+  const file = path.join(env.projectsDir, P, 'usage.jsonl');
+  // 先用新格式建出 S001（会写两行新格式），再在它前面插入第一版的两行
+  mock.script('/v1/tools/fetch', { body: PAGE });
+  const web = createWebTools({ client: client(), usage: env.usage, gateway: env.gw, workbench: env.workbench, timeoutMs: 5000 });
+  await web.fetch(P, { url: 'https://example.org/A', create: true });
+  const legacy = [
+    { at: '2026-10-18T00:00:00.000Z', api: 'fetch', source_id: 'S001', url: 'https://example.org/A', ok: true, status: 200, usd: 0.001 },
+    { at: '2026-10-18T00:00:01.000Z', api: 'fetch', source_id: 'S001', url: 'https://example.org/A', ok: false, status: 404, usd: 0 },
+  ];
+  fs.writeFileSync(file, legacy.map((l) => JSON.stringify(l)).join('\n') + '\n' + fs.readFileSync(file, 'utf8'));
+  for (let i = 0; i < 2; i++) {
+    const u = createUsage({ workbench: env.workbench, pricing: DEFAULTS.pricing });
+    const t = u.totals(P);
+    assert.equal(t.calls, 3, `第 ${i + 1} 次加载`);
+    assert.ok(Math.abs(t.usd - (0.001 + 0.00075)) < 1e-12);
+    assert.equal(u.entries(P).filter((e) => e.legacy).length, 2);
+    assert.throws(() => u.reserve(P, { api: 'search', attempt: 1 }), { kind: 'budget' }); // 已到 3 次上限
+  }
+  // 只看旧版两行时，抓取历史决定可获取性（最后一次是 404）
+  fs.writeFileSync(file, legacy.map((l) => JSON.stringify(l)).join('\n') + '\n');
+  const u = createUsage({ workbench: env.workbench, pricing: DEFAULTS.pricing });
+  assert.equal(u.availabilityOf(P, { urlOf: () => 'https://example.org/A' }).get('S001').state, 'temporarily_unavailable');
+  assert.throws(() => u.availabilityOf(P), /urlOf/);
+  assert.deepEqual([u.totals(P).calls, u.totals(P).usd], [2, 0.001]);
 });
