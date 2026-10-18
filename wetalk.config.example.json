@@ -1,5 +1,5 @@
 {
-  "port": 7788,
+  "port": 7790,
   "humanName": "主持人",
   "timeoutSec": 300,
   "maxPromptChars": 60000,
@@ -11,7 +11,9 @@
       "color": "#D97757",
       "icon": "claude",
       "adapter": "claude",
-      "command": ["claude"]
+      "command": [
+        "claude"
+      ]
     },
     {
       "id": "codex",
@@ -30,7 +32,10 @@
       "color": "#4F7DF3",
       "icon": "gemini",
       "adapter": "agy",
-      "command": ["agy", "%LOCALAPPDATA%\\agy\\bin\\agy.exe"]
+      "command": [
+        "agy",
+        "%LOCALAPPDATA%\\agy\\bin\\agy.exe"
+      ]
     }
   ]
 }

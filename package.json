@@ -1,13 +1,14 @@
 {
-  "name": "wetalk",
+  "name": "wetalk-work",
   "version": "0.1.0",
-  "description": "本地多 AI 研讨室：Claude Code / Codex / Antigravity 同场讨论",
+  "description": "WETALK 工坊：从 WeTalk 派生的多 Agent 内容生产工坊（任务、记录、证据链、提交与恢复）",
   "license": "Apache-2.0",
   "type": "module",
   "private": true,
   "scripts": {
     "start": "node server.mjs",
-    "test": "node --test"
+    "test": "node --test",
+    "new-project": "node scripts/new-project.mjs"
   },
   "engines": {
     "node": ">=18"

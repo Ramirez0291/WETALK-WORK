@@ -8,6 +8,8 @@ import { createCallLog } from './lib/calllog.mjs';
 import { rngFrom, normalizeSeed, shuffle, buildQueue } from './lib/schedule.mjs';
 import { runAgent, buildPrompt, parseReply, resolveCommand, listOptions, isCombined, MEMORY_MAX_CHARS, CHOICE_LABEL } from './lib/agents.mjs';
 import { RULES, tally, decideOutcome, buildVotePrompt, parseVote, buildDraftPrompt, parseDraft, resultText } from './lib/voting.mjs';
+import { createWorkbench, loadDefaults } from './lib/workbench/project.mjs';
+import { workbenchRoutes } from './lib/workbench/http.mjs';
 
 const ROOT = path.dirname(fileURLToPath(import.meta.url));
 const CONFIG_FILE = path.resolve(process.env.WETALK_CONFIG || path.join(ROOT, 'wetalk.config.json'));
@@ -18,6 +20,12 @@ const DATA_DIR = path.resolve(process.env.WETALK_DATA || path.join(ROOT, 'data')
 const SANDBOX = path.join(DATA_DIR, 'sandbox'); // AI 发言时的工作目录，空目录，免得它们去翻项目文件
 const store = createStore(path.join(DATA_DIR, 'forum.json'));
 const callLog = createCallLog(path.join(DATA_DIR, 'calls.jsonl')); // 每次调用 AI 的完整快照
+
+// 工坊：项目资料放在独立的 git 仓库里（默认是本仓库下的 projects/，本仓库忽略它）
+const WB_DEFAULTS = loadDefaults(path.join(ROOT, 'workbench.defaults.json'));
+const PROJECTS_DIR = path.resolve(ROOT, process.env.WETALK_PROJECTS || WB_DEFAULTS.projectsDir);
+const workbench = createWorkbench({ projectsDir: PROJECTS_DIR, defaults: WB_DEFAULTS, templateDir: path.join(ROOT, 'templates', 'project') });
+const workbenchInit = await workbench.init();
 
 const participants = config.participants.map((p) => ({ ...p, resolved: resolveCommand(p.command) }));
 const publicParticipant = (p) => ({
@@ -1093,6 +1101,8 @@ const routes = [
     broadcast({ type: 'participant', participant: publicParticipant(p) });
     return publicParticipant(p);
   }],
+
+  ...workbenchRoutes({ workbench, readJson, broadcast }),
 ];
 
 const server = http.createServer(async (req, res) => {
@@ -1129,7 +1139,7 @@ const server = http.createServer(async (req, res) => {
     }
     throw new HttpError(404, '没有这个接口');
   } catch (e) {
-    if (!(e instanceof HttpError)) console.error(e);
+    if (!(e instanceof HttpError) && !e.status) console.error(e); // 工坊模块的错误自带 status
     send(res, e.status || 500, { error: e.message });
   }
 });
@@ -1137,5 +1147,6 @@ const server = http.createServer(async (req, res) => {
 server.listen(PORT, HOST, () => {
   console.log(`\nWeTalk 研讨室已启动：http://localhost:${PORT}\n`);
   for (const p of participants) console.log(`  ${p.resolved ? '✓' : '✗'} ${p.name.padEnd(12)} ${p.resolved || '（未找到命令，自动发言不可用）'}`);
+  console.log(`\n工坊项目目录：${PROJECTS_DIR}${workbenchInit.git ? '' : `（git 不可用，暂不留档：${workbenchInit.gitError}）`}`);
   console.log(`\nMCP 接入：node ${path.join(ROOT, 'mcp.mjs')}（环境变量 WETALK_AGENT=你的名字）\n`);
 });

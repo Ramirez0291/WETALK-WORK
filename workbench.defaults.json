@@ -1,0 +1,45 @@
+{
+  "projectsDir": "projects",
+  "modes": {
+    "collect_sources": "divide",
+    "extract_claims": "divide",
+    "check_citations": "divide",
+    "angle": "compete",
+    "outline": "compete",
+    "core_explanation": "compete",
+    "core_claim": "adversarial",
+    "causal_explanation": "adversarial",
+    "key_number": "adversarial"
+  },
+  "compete": { "drafts": 2 },
+  "verify": { "coreClaimVerifiers": 2, "otherClaimVerifiers": 1 },
+  "evidence": { "maxAttempts": 2 },
+  "reader": { "default": "audience", "addReviewerFor": ["disputed_fact", "disputed_number"] },
+  "rounds": null,
+  "lease": { "minutes": 30 },
+  "cooldown": { "apiSeconds": 60, "cliMinutes": 60 },
+  "retry": { "max": 3, "delaysSec": [2, 4, 8] },
+  "task": { "maxAttempts": 3, "maxDepth": 3 },
+  "budget": { "calls": 300, "apiUsd": 10 },
+  "routing": {
+    "extract": ["deepseek"],
+    "summarize": ["deepseek"],
+    "outline": ["claude", "codex"],
+    "key_writing": ["claude", "codex"],
+    "verify": ["different_vendor"],
+    "search": ["deepseek"]
+  },
+  "memory": { "loadByDefault": ["conventions", "shared"] },
+  "plateau": { "rounds": 1, "action": "audience_reader" },
+  "slides": { "maxCharsPerPage": 100 },
+  "offPeak": { "defer": false },
+  "git": { "autoCommit": true },
+  "export": {
+    "formats": ["md", "pptx"],
+    "via": "script",
+    "template": null,
+    "skill": null,
+    "python": ".venv\\Scripts\\python.exe"
+  },
+  "render": { "engine": "auto" }
+}

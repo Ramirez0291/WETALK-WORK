@@ -1,0 +1,543 @@
+# WETALK 工坊开发文档
+
+Oct 18, 2026 · @LI(RAMI)LINGYUE
+
+本文档把 claudework 多 Agent 工坊设计 V2 拆成可开发的工作包，在从 WETALK 派生的新仓库（暂名 `WETALK-WORK`）里实现。WETALK 本身保持轻便，不合入工坊功能。v0.2 根据评审补了四份核心契约（证据与核验、提交与恢复、任务与租约、上下文与可见性），状态改为由记录派生，并重排了工作包。
+
+## 范围与约束
+
+**要做：**
+
+- 项目目录与正式记录（来源卡、论断、作品版本），以及从 PPT 页面追溯到原文的链路；
+- 提交入口（候选稿、晋升、崩溃恢复）、依赖索引与派生状态；
+- DeepSeek API 适配器与用量记录；
+- 三种工作方式：分工、竞争（密封起草＋选择＋移植补丁）、对抗核验（异议＋两步核验）；
+- 规则调度：任务认领、依赖、租约、限流冷却；
+- 任务包、阶段重置、观众型新读者；
+- PPT 输出与成品检查。
+
+**暂不做：** 检索库（Basic Memory）、Gemini Grounding 接入、编码任务支持、自动分工优化、多用户。
+
+**技术约束：**
+
+- 核心服务沿用 WETALK 的技术栈：Node.js 18+、原生模块、原生前端；
+- 工坊仓库允许引入运行依赖（例如 PPT 导出），每个依赖在 README 里写明用途；WETALK 本体继续保持零依赖；
+- 只监听本机，服务进程是正式区唯一的写入者；
+- 结构化记录用 JSON，便于程序校验；长文本用 Markdown；
+- Windows 优先，路径处理和命令行调用沿用现有的 Windows 兼容做法；
+- 可调参数放在配置文件里；一致性要求作为系统不变量写在代码里，不提供开关；
+- 工坊从 WETALK 派生为独立仓库，把 WETALK 设为 upstream 远程，按需同步修复；WETALK 不合入工坊功能。
+
+## 现有代码基线
+
+WETALK 目前在 `main` 分支，共 4 次提交。工坊仓库从 WETALK 的 `main` 派生，保留提交历史。下表“本次改动”一列都只发生在工坊仓库里，WETALK 本身不改。
+
+| 模块 | 现状 | 本次改动 |
+| --- | --- | --- |
+| `server.mjs` | HTTP 路由、SSE 推送、发言队列、表决流程；唯一写盘的进程 | 挂载工坊路由和调度循环，继续保持单写入者 |
+| `lib/store.mjs` | forum.json 整体重写；议题、发言、记忆本（按空间和参与者，带版本）、表决 | 不承载工坊记录，避免 forum.json 膨胀；工坊记录存在项目目录 |
+| `lib/agents.mjs` | claude -p（关闭全部工具）、codex exec（只读沙箱、空工作目录）、agy、generic；讨论提示词禁止读写文件 | 新增 DeepSeek API 适配器；按契约四提供“无工具”和“只读临时工作目录”两种调用方式；Codex 增加命令审计；讨论模式不变 |
+| `lib/voting.mjs` | 三种通过规则、密封或公开投票、保留异议、事实与依据字段、起草与拒绝起草 | 复用于叙事选择类分歧和竞争方案的选择投票 |
+| `lib/calllog.mjs` | calls.jsonl 追加写入；记录提示词、原始回复、耗时、失败分类；不记录 token 用量 | 增加用量、任务号和任务包版本 |
+| `mcp.mjs` | 6 个工具：议题、发言、记忆本 | 增加任务、记录、异议相关工具 |
+| `public/` | 原生前端，含中英文 | 增加项目面板：任务、记录、待复核、待你决定 |
+| `tests/` | 只有 i18n 测试 | 每个新模块补单元测试 |
+
+有两点现成的设计可以直接利用：
+
+- **调用本身是无状态的。** claude -p 和 codex exec --ephemeral 每次都是新会话，所以“阶段重置”几乎没有成本，关键在于提示词里装什么。
+- **密封投票已经并行执行，并在服务端隐藏票面。** 竞争起草可以复用这套并行机制；但它只在接口层隐藏，票面仍会写进磁盘，所以要按契约四补上“密封期间不落盘”。
+
+## 目标结构
+
+代码和内容分开存放：工坊代码在派生的工坊仓库里，项目资料放在 `WETALK-WORK\projects`（路径写在配置里）。两边各自是一个 git 仓库。
+
+**工坊仓库在 WETALK 基础上新增：**
+
+```text
+WETALK-WORK/       
+├─ lib/workbench/
+│  ├─ project.mjs      项目加载、新建，合并默认参数与项目覆盖
+│  ├─ records.mjs      记录读写、版本、内容寻址的 blob 存储
+│  ├─ deps.mjs         派生 based_on、反向索引与全部派生状态
+│  ├─ txn.mjs          写前日志、崩溃恢复、仓库级队列、单实例锁
+│  ├─ commit.mjs       收稿与晋升、git 留档与重试
+│  ├─ verify.mjs       两步核验与核验记录
+│  ├─ objections.mjs   异议状态、补证任务、来源可获取性
+│  ├─ tasks.mjs        任务状态、租约、栅栏、幂等、上限
+│  ├─ packets.mjs      保存实际输入的任务包
+│  ├─ visibility.mjs   按任务类型决定输入方式与文件访问，密封期间只存内存
+│  ├─ modes.mjs        分工、竞争、对抗核验及其提示词模板
+│  ├─ scheduler.mjs    规则调度循环：派发、冷却、争议分流
+│  ├─ changelog.mjs    改动记录与停滞检测
+│  ├─ web.mjs          DeepSeek Search / Fetch 封装
+│  └─ export/
+│     ├─ markdown.mjs   幻灯片源 → Markdown
+│     ├─ pptx.py        幻灯片源 ＋ 模板 → PPTX（python-pptx），并读回核对
+│     ├─ render.py      PPTX → PDF / 图片，字体检查
+│     └─ agent.mjs      指定 Agent 负责导出时的任务封装
+├─ lib/agents.mjs       ＋ deepseek 适配器、无工具与只读目录两种调用、Codex 命令审计
+├─ templates/           PPT 模板文件
+├─ workbench.defaults.json   可调参数默认值
+└─ tests/workbench/*.test.mjs
+```
+
+**每个项目一个目录：**
+
+```text
+WETALK-WORK\projects          整个目录是一个 git 仓库
+├─ _txn\                          写前日志（仓库级）
+├─ commits.jsonl                  提交日志，与正式记录一起构成事实来源
+└─ <项目名>\
+   ├─ project.md            项目约定：受众、目的、篇幅、风格、验收标准
+   ├─ protocol.json         本项目对默认参数的覆盖
+   ├─ sources\S001.json              来源卡（正文快照在 blob 里）
+   ├─ claims\C001.json               论断
+   ├─ verifications\V001.json        核验记录
+   ├─ objections\O001.json           异议
+   ├─ outline\ · script\ · slides\   正式作品
+   ├─ candidates\                    候选稿与历史草稿
+   ├─ tasks\T001.json                任务
+   ├─ decisions\D001.md              参数与内容的决策记录
+   ├─ handoff\                       阶段交接单
+   ├─ exports\                       导出的 Markdown、PPTX 与渲染检查结果
+   ├─ events.jsonl                   审计事件，只追加
+   └─ archive\                       旧版本、blobs、任务包快照
+
+非密封任务的临时工作目录放在 projects 之外（例如工坊仓库的 data\work\），只放允许的输入副本。
+```
+
+四层记忆在目录里的对应：项目约定 = `project.md`；共享知识与状态 = sources、claims、verifications、objections、作品、tasks；Agent 工作笔记 = 每个“项目＋阶段”的 WETALK 记忆空间和非密封任务的临时工作目录；完整档案 = `archive/`、`events.jsonl`、`commits.jsonl` 和 calls.jsonl。
+
+## 数据模型
+
+正式记录只保存事实，状态一律由记录派生，不直接写入。这样即使中途崩溃，重启后全量重算也能得到一致的状态。
+
+- **权威引用字段：** 论断的 `sources`、作品的 `claims`。`based_on` 由程序从这两个字段派生，Agent 不填写，也就不会出现“追溯链存在、失效传播却漏掉”的情况。
+- **版本：** 每条正式记录带 `version`，引用一律写成 `{id, version}`。
+- **内容寻址：** 所有输入内容（JSON、Markdown、来源正文、模板、skill）按内容 hash 存入 `archive/blobs/`，只增不改。记录和任务包通过 hash 引用它们。
+
+| 实体 | 文件 | 关键字段 | 写入者 |
+| --- | --- | --- | --- |
+| 来源卡 | `sources/S###.json` | title、author、edition、citation 或 url、origin（最早可追溯出处）、text\_blob（正文快照）、availability | 提交入口 |
+| 论断 | `claims/C###.json` | type、text、sources（含 locator 与 quote）、earliest\_attestation（textual 必填） | 提交入口 |
+| 核验记录 | `verifications/V###.json` | target（论断 id@version）、source\_versions、verdict、reason、support\_quote、verifier（Agent、模型、厂商，或你） | 提交入口 |
+| 异议 | `objections/O###.json` | target、category、pointer、state、raised\_by、resolution | 提交入口 |
+| 作品 | `outline/` `script/` `slides/` | 页或节的 id、claims | 提交入口 |
+| 候选稿 | `candidates/<任务>-<尝试>/` | 结果内容、提交时的依赖版本、request\_id | 提交入口 |
+| 任务 | `tasks/T###.json` | 见“契约三” | 调度程序 |
+| 提交日志 | `_txn/` 与 `commits.jsonl` | 见“契约二” | 提交入口 |
+| 事件 | `events.jsonl` | 仅用于审计，只追加 | 服务进程 |
+
+**论断的派生状态**（每次读取时计算，提交者不能直接写）：
+
+| 维度 | 取值 | 计算方式 |
+| --- | --- | --- |
+| 核验状态 | unreviewed / supported / disputed / unsupported | 只计入绑定当前论断版本和当前来源版本的核验记录：没有记录为 unreviewed；全部支持为 supported；全部不支持为 unsupported；判断不一致为 disputed |
+| 版本新鲜度 | current / stale | 任一上游的当前版本高于 based\_on 里记录的版本，即为 stale |
+| 未解决阻塞 | 异议编号列表 | 阻塞类异议中状态为 open、needs\_evidence、upheld 或 needs\_user 的 |
+| 可进入成品 | 是 / 否 | 核验状态为 supported，新鲜度为 current，且没有未解决阻塞 |
+
+由此得出四条规则：
+
+- 来源更新只会让下游变成 stale 并要求重新核验，不会自动恢复可信；
+- 论断修改后版本变化，旧核验不再计入，状态回到 unreviewed；
+- 解除一个异议不影响其他异议；
+- 崩溃发生在“写完新来源、还没标记下游”之间也没关系：新鲜度是算出来的，重启后下游自然是 stale。
+
+**论断示例**（字段示意，尖括号内为占位；状态不在文件里）：
+
+```json
+{
+  "id": "C007",
+  "version": 2,
+  "type": "textual",
+  "text": "盘古开天辟地的故事，一般认为最早见于三国吴徐整的《三五历纪》。",
+  "earliest_attestation": { "work": "《三五历纪》", "author": "徐整", "period": "三国·吴" },
+  "sources": [{ "id": "S012", "version": 1, "locator": "<页码或章节>", "quote": "<原文引文>" }]
+}
+```
+
+## 契约一：证据与核验
+
+程序只检查指针有效，核验者判断证据是否支持结论。两步分开，各自留记录。
+
+**第一步：指针是否有效（程序）**
+
+| 指针 | 程序检查 | 能证明 | 不能证明 |
+| --- | --- | --- | --- |
+| quote | 引文出现在来源正文快照中 | 引文存在 | 引文支持目标结论 |
+| fetch\_failure | Fetch 失败记录存在 | 这次获取失败 | 来源不存在，或原有结论错误 |
+| missing\_source | 论断的 sources 为空 | 缺少来源关联 | — |
+
+**第二步：是否支持（核验者）**
+
+- 核验者读论断和来源正文（固定版本的快照），给出 supported 或 unsupported（含“证据不足”），并写理由。
+- 判为 supported 时必须附支持引文。程序只检查这段引文存在；“是否支持”是核验者的判断，记录在案，可以被再次挑战。
+- 核验者必须与论断作者分属不同厂商；核心结论默认需要两份独立核验。
+- 核验记录绑定论断版本和来源版本，任一方升版后不再计入。
+
+**异议状态**
+
+只有三类事实性异议会阻塞：来源不存在、数字错误、引文不支持结论。解释争议、叙事选择、可选扩展永不阻塞。
+
+| 状态 | 进入条件 | 阻塞类是否阻塞 | 下一步 |
+| --- | --- | --- | --- |
+| open | 已提出，指针有效 | 是 | 由作者和提出者之外的核验者裁定 |
+| needs\_evidence | 发现了问题（如数字前后矛盾），暂时定位不到原文 | 是 | 生成补证任务；超过次数上限转 needs\_user，不自动作废 |
+| upheld | 核验者裁定异议成立 | 是 | 论断修改并重新核验后关闭 |
+| rejected | 核验者裁定异议不成立 | 否 | 提出者可以附新证据重新提出 |
+| needs\_user | 核验结论不一致，或对分类有争议 | 是 | 由你裁决 |
+| withdrawn | 提出者撤回 | 否 | — |
+
+**来源可获取性**单独记录，不算异议：
+
+- available：正常；
+- temporarily\_unavailable：Fetch 失败。保留已有快照，快照仍可作证据；按计划重试。没有快照的来源无法支持任何核验；
+- gone：你确认来源已不存在。引用它的论断自动生成“来源不存在”异议。
+
+**验收案例**
+
+- [ ] 来源写“没有证据表明 A 导致 B”，论断写“A 导致 B”：引文存在检查通过，但核验者判 unsupported，论断不能进入成品
+- [ ] 论断改了措辞：旧核验不再计入，状态回到 unreviewed
+- [ ] C07 有两条阻塞异议，只解决一条后仍不能进入成品
+- [ ] 发现数字矛盾但找不到原文：异议为 needs\_evidence 并生成补证任务，超过上限后转 needs\_user
+- [ ] Fetch 失败：来源标为 temporarily\_unavailable，已有快照仍可用于核验
+- [ ] 与作者同厂商的核验记录被提交入口拒绝
+
+## 契约二：提交与恢复
+
+提交入口只做两件事：把结果收为候选稿；在串行的临界区里把候选稿晋升为正式版本。已完成的工作不会因为版本过期而丢掉，但过期的结果也不会直接发布。
+
+**提交请求必须带：** request\_id（幂等用）、project、task\_id、attempt、lease\_token、每个被修改记录的 expected\_version、结果内容。
+
+**两段处理：**
+
+1. **收稿：** 校验格式、身份与租约（见契约三），存为候选稿。同一 request\_id 且内容相同，返回第一次的结果；内容不同，报冲突。
+2. **晋升：** 进入仓库级串行队列（所有项目共用一个 git 仓库，所以队列也是仓库级的）。在临界区内依次检查：目标记录的当前版本等于 expected\_version；依赖全部为当前版本；通过验收规则。任一不满足，候选稿保留，返回原因，由任务基于新版本重做或复核后再晋升。
+
+**晋升的写入顺序（写前日志）：**
+
+1. 在 `_txn/<提交编号>/` 写清单：要写哪些文件、每个文件的新内容 blob、旧版本，状态为 prepared；
+2. 把旧版本复制到归档；
+3. 逐个文件先写临时文件再改名替换。Windows 上遇到文件被占用（EPERM / EBUSY）时重试；
+4. 在 `commits.jsonl` 追加 applied 记录，这一行就是提交成功的标志；再追加审计事件；
+5. 异步做 git 留档：只提交清单里的路径（按路径提交，不带上其他已暂存的改动），提交信息带提交编号、任务号和项目名。成功记 archived，失败记 archive\_failed 并进入重试队列。
+
+**谁是事实来源：**
+
+| 角色 | 内容 | 负责 |
+| --- | --- | --- |
+| 事实来源 | 正式记录文件＋`commits.jsonl` | 崩溃恢复只看它们 |
+| 派生数据 | 依赖索引、新鲜度、核验状态、可进入成品 | 启动时全量重算，从不单独持久化为权威 |
+| 审计 | `events.jsonl` | 只用于追查，不参与恢复 |
+| 留档 | git | 只留历史，不参与恢复 |
+
+**启动时的恢复规则：**
+
+- 有 prepared 清单但 `commits.jsonl` 里没有 applied：按清单重做第 2–4 步。每一步都可以重复执行，完成后记 applied；
+- 已 applied 但未 archived：重新排入 git 留档队列；
+- 正式文件与最后一次 applied 清单的 hash 不一致（服务进程之外的改动）：记事件，进入“待你决定”。
+
+**其他约定：**
+
+- 界面上每次提交分开显示两个状态：数据已提交；留档已完成、待重试或失败。
+- 启动时在 projects 目录建锁文件（含进程号），发现已有存活的服务实例就拒绝启动。
+
+**验收案例**
+
+- [ ] 两个任务都基于 C007 v2 修改：只有一个成为 v3，另一个保留为候选稿并返回版本冲突
+- [ ] 写完新来源后强制杀进程：重启后，依赖它的论断和页面自动为 stale
+- [ ] 在第 3 步中途崩溃：重启后补完写入，不出现半新半旧
+- [ ] git 不可用：数据提交照常成功，留档显示待重试，git 恢复后自动补交
+- [ ] 两个项目同时提交：各自的 git 提交只包含本次清单里的文件
+- [ ] 尝试启动第二个服务实例：被拒绝
+
+## 契约三：任务与租约
+
+任务状态只由调度程序改变。租约防止两人同时做一件事，栅栏令牌防止旧执行者迟到，请求编号防止重传产生第二个结果。
+
+**字段：** id、project、type、mode、inputs、depends\_on、state、attempt（当前尝试号）、holder、lease\_token（每次认领递增）、lease\_until、max\_attempts、depth（由提议链计算）、parent、budget\_used。
+
+**状态转换：**
+
+| 从 | 到 | 触发 |
+| --- | --- | --- |
+| proposed | open | 类型在允许列表内，深度和预算未超限；否则转 needs\_user |
+| open | claimed | 认领成功：attempt 加 1，生成新的 lease\_token |
+| claimed | claimed | 持有者在租约内续租 |
+| claimed | open | 租约到期未续租，或持有者主动释放；当前尝试记为 abandoned |
+| claimed | submitted | 收稿成功，栅栏检查通过 |
+| submitted | done | 候选稿晋升成功 |
+| submitted | open | 晋升失败（版本过期等），需要基于新版本重做 |
+| open | failed | 尝试次数达到上限；进入“待你决定”，不再自动重派 |
+| 任一未完成状态 | cancelled | 你或规则取消；进行中的调用被中止，结果只存历史 |
+| needs\_user | open 或 cancelled | 你决定 |
+
+**栅栏检查：** 只有同时满足“任务处于 claimed、lease\_token 是当前值、attempt 是当前尝试、租约未过期”的提交才能收稿。不满足的提交存为历史草稿，永不自动晋升。
+
+**重启恢复：**
+
+- 服务进程自己拉起的调用在重启后已不存在：这些任务的当前尝试记为 abandoned，任务回到 open；
+- 通过 MCP 认领的外部会话可能仍在运行：它们的租约保持到期为止，可以继续续租。
+
+**上限：** 每个项目的调用次数、API 费用、任务深度、单任务尝试次数都必须有上限，数值可调。超出后，新任务和重试都进入“待你决定”。API 调用内部的重试也计入调用次数。
+
+**验收案例**
+
+- [ ] A 认领后卡住，租约过期；B 接手并提交成功；A 恢复后提交：A 的结果存为历史草稿，B 的结果不受影响
+- [ ] 服务已接受结果但响应丢失，客户端用同一 request\_id 重试：返回第一次的结果，不产生第二个版本
+- [ ] 同一 request\_id、内容不同：返回冲突
+- [ ] 任务连续失败到上限：转 failed，不再循环
+- [ ] 服务重启：服务自己调用的进行中任务被释放，可以重新认领
+- [ ] 自动提议的子任务超过深度上限：进入“待你决定”，不自动执行
+
+## 契约四：上下文与可见性
+
+“只能写自己的目录”和“看不到别人的草稿”是两个要求。第二个要靠控制 Agent 实际能取得的上下文，而不只是在接口里隐藏。工具权限规则不等于操作系统沙箱，没有实测过的隔离不能宣称完成。
+
+| 任务类型 | 输入方式 | 文件访问 |
+| --- | --- | --- |
+| 密封起草、匿名评审、观众型读者 | 固定任务包从标准输入传入，结果由服务端收集 | 无工具 |
+| 读资料的任务（抽取、核验） | 任务包＋专用临时工作目录，只放允许的输入副本 | 只读该目录，隔离程度须实测 |
+| 导出 | 幻灯片源＋模板＋skill 内容 | 只写自己的工作目录 |
+
+**各家的做法：**
+
+- **Claude：** 密封任务沿用 WETALK 现有的无工具调用。读资料的任务只开放读类工具并关闭 Bash，用权限规则拒绝读取 projects 目录的其余部分。
+- **DeepSeek：** 走 API，本来就没有文件访问，只拿到任务包。
+- **Codex：** 命令行 Agent 自带执行命令的能力，只读沙箱也能读其他目录，WETALK 现有适配器也是如此。密封任务里它的调用改用 JSON 事件输出并审计执行过的命令（需实测）；只要出现读文件的命令，该稿标为“独立性未证明”，不参与本轮比较。
+
+**密封期间不落盘：** 草稿和原始回复只保存在服务进程内存里；调用记录先写去掉正文的占位，揭晓后再补写。服务若在揭晓前崩溃，本轮重跑。这样即使某个 Agent 能读整个磁盘，也读不到别人还在密封中的稿子。
+
+**匿名评审：** 正文和元数据里都不出现作者、模型、厂商；用随机标签（方案甲、方案乙），对应关系只存在服务端，评审结束后公开。提交前由程序扫描正文里的署名并去掉。
+
+**观众型读者：** 只拿到讲稿或 PPT 文本，无工具；任务包里不含来源、论断、核验记录。
+
+**阶段重置的范围：** 每个“项目＋阶段”使用一个独立的 WETALK 记忆空间（现有功能支持从空间分支）。重置只归档并清空当前项目、当前阶段的工作记忆，不碰全局共享记忆和其他项目。
+
+**验收案例**
+
+- [ ] 密封起草期间，另一 Agent 的草稿不出现在任何文件、调用记录、归档、MCP 和 HTTP / SSE 中
+- [ ] Codex 在密封任务中执行了读文件命令：该稿被标为“独立性未证明”
+- [ ] 匿名评审实际发送的提示词里搜不到任何作者、模型、厂商名称
+- [ ] 观众型读者实际发送的提示词里不含任何来源或论断
+- [ ] 读资料的 Claude 任务试图读取工作目录以外的项目文件：被拒绝（Windows 实测）
+- [ ] 重置某项目的一个阶段：全局记忆和其他项目的记忆空间不变
+
+## 工作包
+
+先做最小任务契约和任务包，再做三种工作方式，自动调度放在最后。V2 路线图第 4–6 步的顺序因此调整。各工作包的验收以对应契约的验收案例为准，这里只列额外的条目。
+
+| 工作包 | 内容 | 依赖 | 主要文件 |
+| --- | --- | --- | --- |
+| WP1 内容标准与基线 | 派生仓库、项目模板、单 Agent 基线 | — | project.md、baseline.md |
+| WP2 记录、提交与恢复 | 数据模型、派生状态、契约二 | WP1 | records、deps、txn、commit |
+| WP3 DeepSeek 适配器 | API 调用、用量、重试、Search / Fetch | — | agents.mjs、web.mjs、calllog.mjs |
+| WP4 任务契约与任务包 | 契约三、契约四、保存实际输入的任务包；手动派发 | WP2 | tasks、packets、visibility |
+| WP5 三种工作方式与核验 | 契约一、分工、竞争、对抗核验 | WP3、WP4 | modes、verify、objections |
+| WP6 自动调度与阶段重置 | 调度循环、冷却、阶段重置、停滞检测 | WP5 | scheduler、changelog |
+| WP7 导出与成品验收 | Markdown / PPTX 导出、渲染检查、试运行报告 | WP5 | export/ |
+
+### WP1 内容标准与基线
+
+- 从 WETALK 派生工坊仓库（暂名 `WETALK-WORK`），把 WETALK 设为 upstream 远程。
+- 建 ``WETALK-WORK\projects` 并初始化为 git 仓库；项目模板 `project.md` 写受众、观众看完应理解什么、篇幅与页数、风格、验收标准。
+- 提供 `npm run new-project <名称>` 生成模板。
+- 试运行主题：这套方案为了解决什么问题、什么场景适合使用。
+- 用现有单 Agent 流程做一份 PPT，在 `baseline.md` 记录总用时、你的修改时间、发现的实质错误数。
+
+* [ ] project.md 模板经你审阅确认
+* [ ] 基线 PPT 完成，baseline.md 记录了修改时间和错误数
+
+### WP2 记录、提交与恢复
+
+- `records.mjs`：记录读写、版本、归档；内容寻址的 blob 存储。
+- `deps.mjs`：从 sources 和 claims 派生 based\_on 与反向索引；核验、新鲜度、阻塞、可进入成品全部计算得出。
+- `txn.mjs` 与 `commit.mjs`：按契约二实现收稿、晋升、写前日志、崩溃恢复、仓库级队列、git 留档与重试、单实例锁。
+- 追溯接口和界面：记录列表、派生状态、追溯视图、提交与留档状态。
+
+* [ ] 契约二的全部验收案例
+* [ ] 从任一页 PPT 追溯到论断、来源和原文位置
+
+### WP3 DeepSeek 适配器
+
+- `agents.mjs` 新增 `deepseek` 适配器：用 Node 自带的 fetch 调用 OpenAI 兼容接口；密钥只从环境变量 `DEEPSEEK_API_KEY` 读取；沿用现有的超时与中止。
+- 重试：408、429、5xx 按退避重试；其他 4xx 不重试。重试计入项目调用上限。
+- 用量：calls.jsonl 增加 `usage` 字段；Claude 适配器顺便记下 JSON 输出里已有的 modelUsage。
+- `web.mjs`：封装 Search 与 Fetch；Fetch 结果存为来源正文快照 blob；失败时来源标为 temporarily\_unavailable，保留已有快照；遵守每秒 5 次的账户限速。
+
+* [ ] 能调用并记录用量；超时能退出，“停止”能中断
+* [ ] 用本地模拟服务器验证：429 和 5xx 会重试，400 不重试
+* [ ] 搜索结果的 summary 或 snippet 不能作为引文进入论断
+
+### WP4 任务契约与任务包
+
+- `tasks.mjs`：按契约三实现状态转换、认领、续租、栅栏检查、幂等、取消、最大尝试、重启恢复、上限。
+- `packets.mjs`：任务包保存实际输入。每个输入（project.md、来源正文、记录、模板、skill）按内容 hash 引用 blob；同时保存实际发送的提示词和有效配置。hash 用来检查内容有没有变，不能代替内容本身。
+- `visibility.mjs`：按契约四决定每类任务的输入方式和文件访问；密封期间的结果只存内存。
+- 手动派发：通过接口或界面把任务派给指定 Agent，暂不自动调度。
+
+* [ ] 契约三、契约四的全部验收案例
+* [ ] 任一历史任务都能按任务包完整还原当时的输入。还原输入不等于重新运行会得到相同输出
+
+### WP5 三种工作方式与核验
+
+- `verify.mjs` 与 `objections.mjs`：按契约一实现两步核验、异议状态、补证任务、来源可获取性。
+- **分工：** 拆成互不重叠的子任务，结果经提交入口汇总为来源卡和论断。
+- **竞争：** 密封起草（无工具）；匿名评审，每条意见指向具体的节、页或论断编号；由你选择或用表决功能投票；落选方案里的保留内容写成移植补丁，逐条接受或拒绝，书记只应用通过的补丁。
+- **对抗核验：** 由作者之外的厂商核验；核心结论默认两份独立核验。
+- 提示词模板随 modes.mjs 维护。
+
+* [ ] 契约一的全部验收案例
+* [ ] 没有指向具体位置的评审意见被退回
+* [ ] 移植补丁逐条有接受或拒绝记录，未经通过的内容没有进入正式大纲
+
+### WP6 自动调度与阶段重置
+
+- `scheduler.mjs`：规则循环，只读规则，不调用模型做派发判断。派发前置条件已满足的任务；按分工表挑有工具、不在冷却中的 Agent；限流冷却；争议分流到补证任务或“待你决定”。
+- 阶段重置：新阶段任务包不含此前的讨论；生成一页以内的交接单；记忆空间按契约四切换。
+- 讨论模式的长对话截断改为：项目约定＋决议摘要或交接单＋最近发言。
+- 停滞检测区分三种情况：没填改动记录；内容没有变化（由程序比对得出）；有变化但质量指标没有提升（新增 supported 论断数、解除的阻塞数、观众型读者标出的不懂处数量）。后两种才算停滞，Agent 自报的改动类型只作辅助信号。
+
+* [ ] 冷却期间不派任务；超出上限的新任务进入“待你决定”
+* [ ] 三种停滞情况能被区分并分别记录
+
+### WP7 导出与成品验收
+
+- 幻灯片源：`slides/` 下每页一个记录，含标题、正文、讲者备注、引用的论断编号。
+- 两种导出：Markdown（`export/markdown.mjs`）；PPTX（`export/pptx.py`，用 python-pptx 套用 .pptx 模板的版式）。Python 使用工坊仓库自己的 `.venv`，由 `export.python` 指定。
+- 导出方式可配置：脚本导出，或派给指定 Agent（产物同样走提交入口和成品检查）；版式用模板文件或 skill 控制，它们的内容版本写进任务包。
+- **结构检查（程序）：** 正文每个句子要么带论断编号，要么标为非事实；引用的论断全部“可进入成品”；字数不超上限；备注不为空；读回 PPTX 核对页数、备注和编号。
+- **渲染检查：** PPTX → PDF 或图片 → 逐页检查文字溢出与重叠、字体缺失、图表标签裁切、图片变形 → 修复后重新验收。渲染优先用本机 PowerPoint（若已安装，由脚本自动化），否则用 LibreOffice 无界面模式。脚本列出 PPTX 用到的字体并对照本机字体。逐页视觉检查由多模态模型初查、你终审，结果作为核验记录保存。
+- 试运行报告：四项指标与 WP1 基线逐项对比。
+
+* [ ] Markdown 与 PPTX 两种导出都可用；换模板或 skill 不改代码
+* [ ] 用一份故意做出文字溢出和字体缺失的样例，确认渲染检查能查出来
+* [ ] 交付一份可分享的 PPT，每页都有渲染检查记录
+* [ ] 试运行报告与基线可以逐项对比
+
+## 接口清单
+
+所有接口都挂在项目路径下，编号只在项目内唯一。写接口沿用现有的 Host 与来源校验；所有提交类请求都带 request\_id。路径命名是建议，实现时可以调整。
+
+| 方法 | 路径（前缀 `/api/projects/:p`） | 用途 | 工作包 |
+| --- | --- | --- | --- |
+| GET / POST | `/api/projects` | 列出项目；从模板新建 | WP1 |
+| GET | `/` | 概况：记录数、派生状态统计、待你决定数 | WP2 |
+| GET | `/records`、`/records/:id` | 记录与派生状态；历史版本、上下游、核验与异议 | WP2 |
+| POST | `/submissions` | 收稿，存为候选稿；带 task、attempt、lease\_token、expected\_version | WP2 |
+| POST | `/submissions/:sid/promote` | 晋升为正式版本 | WP2 |
+| GET | `/commits` | 每次提交的数据状态与留档状态 | WP2 |
+| GET | `/trace/:id` | 页面 → 论断 → 来源 → 引文 | WP2 |
+| POST | `/web/search`、`/web/fetch` | DeepSeek Search / Fetch，并存快照 | WP3 |
+| GET / POST | `/tasks` | 任务列表；新建或提议任务 | WP4 |
+| POST | `/tasks/:t/claim`、`/renew`、`/release`、`/cancel` | 认领、续租、释放、取消 | WP4 |
+| GET | `/tasks/:t/packet` | 任务包，含实际输入 | WP4 |
+| GET | `/inbox` | 待你决定：争议、超限任务、外部改动、留档失败 | WP4 |
+| POST | `/verifications` | 提交核验记录 | WP5 |
+| POST | `/objections`、`/objections/:o/resolve` | 提交异议；你裁决 needs\_user 的异议 | WP5 |
+| POST | `/compete` | 发起竞争 | WP5 |
+| POST | `/export` | 导出：format、via（script 或某个 Agent）、template、skill | WP7 |
+| GET | `/report` | 结构检查、渲染检查与试运行报告 | WP7 |
+
+SSE 新增事件：`record`、`task`、`verification`、`objection`、`commit`、`archive`、`inbox`。密封中的内容不进入任何事件。
+
+**MCP 工具**（都带 project 参数，都不返回密封中的内容）：`wetalk_task_list`、`wetalk_task_claim`（返回任务包）、`wetalk_task_renew`、`wetalk_submit`、`wetalk_record_read`、`wetalk_trace`、`wetalk_verification_create`、`wetalk_objection_create`。
+
+## 配置文件
+
+配置只调参数，关不掉系统不变量。参数默认值写在 `workbench.defaults.json`，项目用自己的 `protocol.json` 覆盖；任务包记录实际生效的配置。
+
+**系统不变量（写在代码里，没有开关）：**
+
+- 目标版本检查（expected\_version）与依赖版本检查；
+- 提交与身份、租约绑定（lease\_token、attempt），以及 request\_id 幂等；
+- 引用完整性：based\_on 由程序派生；
+- 状态由记录派生，提交者不能直接写状态；
+- 核验者与论断作者分属不同厂商；三类事实性异议一律阻塞；
+- 密封与匿名规则（契约四）；
+- 调用次数、费用、任务深度、尝试次数必须有上限，数值可调，不能设为无限。
+
+**可调参数：**
+
+| 字段 | 含义 | 默认值 |
+| --- | --- | --- |
+| `projectsDir` | 项目资料目录 | ``WETALK-WORK\projects` |
+| `modes` | 任务类型对应的工作方式 | 搜集资料、抽取论断、检查引用用分工；选题角度、大纲、核心解释用竞争；核心结论、因果解释、重要数字用对抗核验 |
+| `compete.drafts` | 竞争方案份数 | 2 |
+| `verify.coreClaimVerifiers` | 核心结论需要的独立核验份数 | 2（其他论断 1 份） |
+| `evidence.maxAttempts` | 补证任务次数上限 | 2 |
+| `reader.default` | 默认新读者类型 | audience（观众型） |
+| `reader.addReviewerFor` | 何时加审稿型读者 | 有争议的事实或数字 |
+| `rounds` | 讨论与表决轮次上限 | 沿用 WETALK 现有设置 |
+| `lease.minutes` | 任务租约时长 | 30（建议初值） |
+| `cooldown.apiSeconds` | API 被限流后的等待 | 优先按 Retry-After；没有时 60 秒 |
+| `cooldown.cliMinutes` | 订阅版命令行工具额度用尽后的冷却 | 60（建议初值） |
+| `retry.max` | API 失败重试次数 | 3，间隔 2、4、8 秒 |
+| `task.maxAttempts` | 单任务最大尝试次数 | 3 |
+| `task.maxDepth` | 自动提议任务的最大深度 | 3 |
+| `budget.calls` | 每个项目的模型调用次数上限 | 300（建议初值） |
+| `budget.apiUsd` | 每个项目的 API 费用上限 | 10 美元（建议初值） |
+| `routing` | 工作类型对应的模型 | 见 V2“模型分工”表 |
+| `memory.loadByDefault` | 默认进入任务包的记忆层 | 项目约定、共享知识与状态 |
+| `plateau.rounds` | 连续几轮“无变化”或“无提升”算停滞 | 1 |
+| `plateau.action` | 停滞时的动作 | 派观众型新读者 |
+| `slides.maxCharsPerPage` | 每页正文字数上限（不含备注） | 100（建议初值） |
+| `offPeak.defer` | 批量任务推迟到低谷时段 | false |
+| `git.autoCommit` | 数据提交后自动 git 留档 | true |
+| `export.formats` | 导出格式 | md、pptx |
+| `export.via` | 导出方式 | script（也可填某个 Agent 的 id） |
+| `export.template` | PPTX 模板文件 | 未设定时用脚本自带的默认版式 |
+| `export.skill` | 导出任务引用的 skill | 未设定 |
+| `export.python` | 导出脚本使用的 Python 解释器 | 工坊仓库内的 `.venv\Scripts\python.exe` |
+| `render.engine` | 渲染检查用的程序 | auto：有 PowerPoint 用 PowerPoint，否则 LibreOffice |
+
+每次修改参数，在项目的 `decisions/` 里记一条：改了什么、为什么、依据哪次试运行的数据。
+
+## 测试与验收
+
+单元测试沿用 `node --test`，每个测试在临时目录里建小样本项目。时钟可注入，租约和冷却不用真等；提交流程的每一步之后都可以注入崩溃，再模拟重启。
+
+| 模块 | 必测场景 |
+| --- | --- |
+| 派生状态（deps） | 多级 stale 传播；论断修改后旧核验失效；多条异议只解除一条仍阻塞；循环引用被拒绝 |
+| 提交（txn、commit） | 契约二全部案例；每一步之后注入崩溃并恢复；改名遇到文件占用时重试 |
+| 任务（tasks） | 契约三全部案例 |
+| 核验（verify、objections） | 契约一全部案例 |
+| 可见性与任务包 | 契约四全部案例；按任务包还原输入 |
+| deepseek 适配器 | 用本地模拟服务器验证重试、超时、中止、用量记录 |
+| 导出 | 结构检查；用故意做坏的样例验证渲染检查能查出问题 |
+
+**集成测试：** 用一个固定样本项目（2 份来源、3 条论断、2 页幻灯片）走完整流程：提交、核验、追溯、更正来源、重新核验、导出、渲染检查。项目路径或用户目录含日文字符时，脚本和命令行调用也要跑通。
+
+**试运行验收：** 同一主题、同一内容标准下，对比基线与多 Agent 版的四项指标，结果写进试运行报告。
+
+## 决定与待定事项
+
+| 问题 | 决定 |
+| --- | --- |
+| 项目资料位置 | ``WETALK-WORK\projects`，整个目录是一个 git 仓库 |
+| 运行依赖 | 工坊仓库允许引入，例如 PPT 导出；WETALK 继续保持零依赖 |
+| 试运行主题 | 这套方案为了解决什么问题、什么场景适合使用 |
+| PPT 导出 | Markdown 与 PPTX 两种导出脚本；可指定 Agent 负责导出；可用模板文件或 skill 控制版式 |
+| 初始数值 | 先采用“配置文件”表里的建议初值，试运行后按数据调整 |
+| 自动 git | 需要；数据提交与 git 留档分开记状态 |
+| 仓库归属 | 工坊作为从 WETALK 派生的新仓库，WETALK 保持轻便 |
+| Python 与 git | 本机已装；导出脚本用工坊仓库自己的 `.venv` |
+| 证据核验 | 程序查指针是否有效，核验者判断是否支持，记录绑定版本 |
+| 状态 | 由记录派生，分核验、新鲜度、阻塞三个维度 |
+| 工作包顺序 | 先任务契约与任务包，再三种工作方式，自动调度最后 |
+
+**待定：**
+
+- [ ] 试运行 PPT 的目标观众，写进 project.md（WP1）
+- [ ] 本机是否装有 PowerPoint：决定渲染检查用 PowerPoint 还是 LibreOffice（WP7）
+- [ ] Codex 的 JSON 事件输出能否可靠地审计执行过的命令，在 WP4 开始前实测
+
+## 参考
+
+- 设计文档：claudework 多 Agent 工坊设计 V2
+- [WETALK 仓库](https://github.com/Ramirez0291/wetalk)
+- [DeepSeek API Docs — Search & Fetch](https://api-docs.deepseek.com/guides/search)
+- [Claude Code Docs — Configure permissions](https://code.claude.com/docs/en/permissions.md)

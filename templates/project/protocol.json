@@ -1,0 +1,3 @@
+{
+  "_comment": "本项目对 workbench.defaults.json 的覆盖，只写要改的键。每次修改在 decisions/ 里记一条：改了什么、为什么、依据哪次试运行的数据。"
+}

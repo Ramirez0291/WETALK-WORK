@@ -78,3 +78,7 @@ yarn-error.log*
 .DS_Store
 Thumbs.db
 Desktop.ini
+
+# 工坊：项目资料是独立的 git 仓库；导出用的 Python 虚拟环境
+/projects/
+/.venv/
