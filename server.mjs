@@ -41,6 +41,8 @@ const deepseek = createDeepseekClient({
   rateLimits: { search: createRateLimiter(WB_DEFAULTS.deepseek.webPerSecond), fetch: createRateLimiter(WB_DEFAULTS.deepseek.webPerSecond) },
 });
 const usage = createUsage({ workbench, pricing: WB_DEFAULTS.pricing });
+// SSE 客户端：必须在任何可能广播的代码（启动时的任务恢复会发事件）之前建好
+const clients = new Set();
 const wbEvent = (ev) => broadcast({ ...ev, type: `wb-${ev.type}` }); // 工坊事件里从不带正文
 // 任务看板（契约三）：任务状态只由它改变；它同时是提交入口的栅栏
 const board = createTaskBoard({ workbench, usage, onEvent: wbEvent });
@@ -128,7 +130,6 @@ for (const p of participants) {
 
 // ---------- SSE 推送 ----------
 
-const clients = new Set();
 function broadcast(ev) {
   const data = `data: ${JSON.stringify(ev)}\n\n`;
   for (const res of clients) res.write(data);
