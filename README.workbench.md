@@ -56,6 +56,19 @@ npm start
 - 价目在 `workbench.defaults.json` 的 `pricing`（高峰价，低谷按 `offPeakFactor` 折算；不识别中国节假日，一律按高峰估算，宁可高估）。价格变了改这里。
 - 来源正文只有两个来处：Fetch 快照，或主持人在工坊页面手工录入。论断的引文必须能在所引来源版本的正文快照里找到（忽略 Markdown 的标点转义和空白重排），否则不能晋升。
 
+## 任务（WP4）
+
+- 工坊页面的“任务”标签：新建任务（类型来自 `modes`，另有 `anonymous_review`、`audience_reader`），派发给指定参与者，取消，处理“待你决定”，查看每次尝试的任务包，揭晓密封轮次。
+- 状态：提出 → 可认领 → 进行中 → 已交稿 → 完成；另有失败（尝试次数用完）、已取消、待你决定（类型不允许、深度或预算超限）。租约默认 30 分钟，到期自动收回；迟到的旧结果存为历史草稿，不会覆盖新结果。
+- 任务包存在 `projects/<项目>/archive/packets/`，记录当时实际发送的提示词、全部输入（按内容 hash）和有效配置，能完整还原。
+- **可见性**：
+  - Claude、Codex 和 DeepSeek 执行工坊任务时，输入一律写进提示词，不给任何工具。WP4 在本机实测过：只开读类工具的 Claude、开着 shell 的 Codex 都能读到工作目录以外的文件。
+  - Codex 另外关掉内置应用、插件、浏览器、多 Agent、网络搜索等，并按 `--json` 事件审计：出现任何工具调用，那份稿子都标为“独立性未证明”。
+  - 密封类任务（竞争起草、匿名评审、观众型读者）的结果在揭晓前只留在服务进程内存里；服务重启则本轮重跑。
+- 命令行 Agent 的每次调用同样占项目的调用次数上限。
+- MCP 新增工具：`wetalk_task_list`、`wetalk_task_claim`（返回租约凭证和任务包）、`wetalk_task_renew`、`wetalk_submit`、`wetalk_record_read`、`wetalk_trace`。外部会话的身份一律记为未证实；密封类任务不能由外部会话认领。`mcp.mjs` 默认连本仓库配置里的端口。
+- 真实 Agent 的可见性实测脚本：`node tests/workbench/live/live-agents.mjs codex deepseek claude`（会真实调用，不在 `npm test` 里）。Codex CLI 升级后要重跑。
+
 ## 新建项目
 
 ```bash

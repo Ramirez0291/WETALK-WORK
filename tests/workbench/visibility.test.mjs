@@ -120,7 +120,7 @@ test('Codex 在密封任务中执行了读文件命令或调用了 MCP 工具：
     results[mode] = env.board.get(P, t.id).attempts[0].independence;
     const args = readJson(argsFile);
     // 密封类调用：JSON 事件、不加载用户配置（不带 MCP 服务）、关掉 shell；不写最后消息的临时文件
-    for (const flag of ['--json', '--ignore-user-config', 'shell_tool', 'unified_exec', '-m']) assert.ok(args.includes(flag), `${mode} 缺少 ${flag}`);
+    for (const flag of ['--json', '--ignore-user-config', 'shell_tool', 'unified_exec', 'apps', 'plugins', 'browser_use', 'computer_use', 'multi_agent', 'web_search="disabled"', '-m']) assert.ok(args.includes(flag), `${mode} 缺少 ${flag}`);
     assert.ok(!args.includes('-o'));
     const r = env.runner.reveal(P, `R-${t.id}`);
     assert.equal(r.results[0].independence, results[mode]);
@@ -274,4 +274,16 @@ test('辅助：结果解析与约定清理', () => {
   assert.throws(() => parseChanges('```json\n{}\n```'), /changes 数组/);
   const tpl = '## 受众\n\n（谁来看：身份。）\n\n> 引导\n';
   assert.equal(cleanConventions('## 受众\n\n（谁来看：身份。）\n\n> 引导\n（我自己写的括号）\n<!-- 注释 -->', tpl), '## 受众\n\n（我自己写的括号）');
+});
+
+test('读资料任务的越界检查（启发式）：绝对路径越出工作目录、“..”、MCP 工具都算越界；工作目录内的相对路径不算', async () => {
+  const { outsideWorkdir } = await import('../../lib/workbench/runner.mjs');
+  const wd = path.join(os.tmpdir(), 'wb-work', 'T001-a1');
+  const run = (command, type = 'command_execution') => outsideWorkdir([{ type, command, server: 'node_repl', tool: 'js' }], wd);
+  assert.deepEqual(run(`powershell -Command "Get-Content -LiteralPath '${String.raw`C:\Users\x\draft.txt`}' -Raw"`), [String.raw`C:\Users\x\draft.txt`]);
+  assert.deepEqual(run('Get-Content S001.v1.json'), []);
+  assert.deepEqual(run(`Get-Content ${path.join(wd, 'S001.json')}`), []);
+  assert.deepEqual(run(String.raw`type ..\secret.txt`), ['..']);
+  assert.deepEqual(run('cat ../secret.txt'), ['..']);
+  assert.deepEqual(run(null, 'mcp_tool_call'), ['MCP 工具 node_repl/js']);
 });
