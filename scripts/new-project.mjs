@@ -1,10 +1,12 @@
 #!/usr/bin/env node
 // npm run new-project <名称>：从模板新建工坊项目。
-// 服务进程是正式区唯一的写入者，所以服务在运行时走它的接口；服务没运行时才直接在本地创建。
+// 服务进程是正式区唯一的写入者，所以先走服务接口。接口连不上并不能证明服务已经退出，
+// 所以本地创建前要先取得项目目录的单实例锁：服务还活着就取不到，直接报错。
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createWorkbench, loadDefaults } from '../lib/workbench/project.mjs';
+import { createCommitGateway } from '../lib/workbench/commit.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const name = process.argv.slice(2).join(' ').trim();
@@ -42,10 +44,16 @@ async function viaServer(port) {
 async function locally() {
   const defaults = loadDefaults(path.join(ROOT, 'workbench.defaults.json'));
   const projectsDir = path.resolve(ROOT, process.env.WETALK_PROJECTS || defaults.projectsDir);
-  const wb = createWorkbench({ projectsDir, defaults, templateDir: path.join(ROOT, 'templates', 'project') });
-  await wb.init();
-  const { project, archive } = await wb.create(name);
-  return { name: project.name, archive, via: '本地（服务未运行）', dir: project.dir };
+  const workbench = createWorkbench({ projectsDir, defaults, templateDir: path.join(ROOT, 'templates', 'project') });
+  const gateway = createCommitGateway({ workbench, defaults, lockOpts: { purpose: 'new-project' } });
+  await gateway.start(); // 取锁、做和服务启动时一样的恢复
+  try {
+    const { project, archive } = await gateway.createProject(name);
+    await gateway.queue.idle();
+    return { name: project.name, archive, via: '本地（服务未运行）', dir: project.dir };
+  } finally {
+    gateway.stop();
+  }
 }
 
 try {

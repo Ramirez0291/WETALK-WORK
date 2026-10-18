@@ -10,6 +10,8 @@ import { runAgent, buildPrompt, parseReply, resolveCommand, listOptions, isCombi
 import { RULES, tally, decideOutcome, buildVotePrompt, parseVote, buildDraftPrompt, parseDraft, resultText } from './lib/voting.mjs';
 import { createWorkbench, loadDefaults } from './lib/workbench/project.mjs';
 import { workbenchRoutes } from './lib/workbench/http.mjs';
+import { createCommitGateway } from './lib/workbench/commit.mjs';
+import crypto from 'node:crypto';
 
 const ROOT = path.dirname(fileURLToPath(import.meta.url));
 const CONFIG_FILE = path.resolve(process.env.WETALK_CONFIG || path.join(ROOT, 'wetalk.config.json'));
@@ -25,7 +27,20 @@ const callLog = createCallLog(path.join(DATA_DIR, 'calls.jsonl')); // 每次调�
 const WB_DEFAULTS = loadDefaults(path.join(ROOT, 'workbench.defaults.json'));
 const PROJECTS_DIR = path.resolve(ROOT, process.env.WETALK_PROJECTS || WB_DEFAULTS.projectsDir);
 const workbench = createWorkbench({ projectsDir: PROJECTS_DIR, defaults: WB_DEFAULTS, templateDir: path.join(ROOT, 'templates', 'project') });
-const workbenchInit = await workbench.init();
+// 提交入口：启动时取得项目目录的单实例锁并做崩溃恢复，之后它是正式区唯一的写入者
+const gateway = createCommitGateway({ workbench, defaults: WB_DEFAULTS, onEvent: (ev) => broadcast({ ...ev, type: `wb-${ev.type}` }) });
+let workbenchStart;
+try {
+  workbenchStart = await gateway.start();
+} catch (e) {
+  console.error(`\n工坊无法启动：${e.message}\n`);
+  process.exit(1);
+}
+process.on('exit', () => gateway.stop());
+for (const sig of ['SIGINT', 'SIGTERM', 'SIGBREAK']) process.on(sig, () => process.exit(0));
+gateway.startArchiveRetry();
+// 主持人入口的令牌：每次启动重新生成，只出现在工坊页面里
+const HOST_TOKEN = crypto.randomBytes(24).toString('hex');
 
 const participants = config.participants.map((p) => ({ ...p, resolved: resolveCommand(p.command) }));
 const publicParticipant = (p) => ({
@@ -693,7 +708,10 @@ function resolveSpace(input) {
   return space.id;
 }
 
-const STATIC = { '/': 'index.html', '/app.js': 'app.js', '/style.css': 'style.css', '/i18n.js': 'i18n.js', '/locales/en.js': 'locales/en.js' };
+const STATIC = {
+  '/': 'index.html', '/app.js': 'app.js', '/style.css': 'style.css', '/i18n.js': 'i18n.js', '/locales/en.js': 'locales/en.js',
+  '/workbench': 'workbench.html', '/workbench.js': 'workbench.js', '/workbench.css': 'workbench.css',
+};
 const MIME = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.svg': 'image/svg+xml' };
 const staticFile = (pathname) =>
   STATIC[pathname] ?? (/^\/icons\/[a-z0-9-]+\.svg$/.test(pathname) ? pathname.slice(1) : null);
@@ -1102,7 +1120,7 @@ const routes = [
     return publicParticipant(p);
   }],
 
-  ...workbenchRoutes({ workbench, readJson, broadcast }),
+  ...workbenchRoutes({ workbench, gateway, readJson, hostToken: HOST_TOKEN, humanName: config.humanName }),
 ];
 
 const server = http.createServer(async (req, res) => {
@@ -1130,6 +1148,8 @@ const server = http.createServer(async (req, res) => {
       const file = path.join(ROOT, 'public', staticFile(url.pathname));
       if (!fs.existsSync(file)) throw new HttpError(404, '文件不存在');
       res.writeHead(200, { 'Content-Type': `${MIME[path.extname(file)]}; charset=utf-8`, 'Cache-Control': 'no-store' });
+      // 工坊页面里填入主持人入口令牌
+      if (url.pathname === '/workbench') return res.end(fs.readFileSync(file, 'utf8').replace('__WB_HOST_TOKEN__', HOST_TOKEN));
       return fs.createReadStream(file).pipe(res);
     }
 
@@ -1140,13 +1160,16 @@ const server = http.createServer(async (req, res) => {
     throw new HttpError(404, '没有这个接口');
   } catch (e) {
     if (!(e instanceof HttpError) && !e.status) console.error(e); // 工坊模块的错误自带 status
-    send(res, e.status || 500, { error: e.message });
+    send(res, e.status || 500, { error: e.message, ...(e.details ? { details: e.details } : {}) });
   }
 });
 
 server.listen(PORT, HOST, () => {
   console.log(`\nWeTalk 研讨室已启动：http://localhost:${PORT}\n`);
   for (const p of participants) console.log(`  ${p.resolved ? '✓' : '✗'} ${p.name.padEnd(12)} ${p.resolved || '（未找到命令，自动发言不可用）'}`);
-  console.log(`\n工坊项目目录：${PROJECTS_DIR}${workbenchInit.git ? '' : `（git 不可用，暂不留档：${workbenchInit.gitError}）`}`);
+  console.log(`\n工坊：http://localhost:${PORT}/workbench`);
+  console.log(`工坊项目目录：${PROJECTS_DIR}${workbenchStart.init.git ? '' : `（git 不可用，暂不留档：${workbenchStart.init.gitError}）`}`);
+  const { redone, dropped } = workbenchStart.recovered;
+  if (redone.length || dropped.length) console.log(`崩溃恢复：重做 ${redone.length} 个未完成的提交，丢弃 ${dropped.length} 个未写完的清单`);
   console.log(`\nMCP 接入：node ${path.join(ROOT, 'mcp.mjs')}（环境变量 WETALK_AGENT=你的名字）\n`);
 });

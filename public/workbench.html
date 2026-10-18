@@ -1,0 +1,87 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="wb-host-token" content="__WB_HOST_TOKEN__">
+  <title>WeTalk 工坊</title>
+  <link rel="stylesheet" href="/workbench.css">
+</head>
+<body>
+  <header class="bar">
+    <div class="brand"><span class="mark">◐</span> 工坊</div>
+    <label class="picker">项目
+      <select id="project"></select>
+    </label>
+    <form id="newProject" class="inline">
+      <input id="newName" placeholder="新项目名" maxlength="64">
+      <button>新建</button>
+    </form>
+    <a class="back" href="/">← 研讨室</a>
+  </header>
+
+  <nav class="tabs" id="tabs">
+    <button data-tab="overview" class="on">概况</button>
+    <button data-tab="records">记录</button>
+    <button data-tab="trace">追溯</button>
+    <button data-tab="commits">提交与留档</button>
+    <button data-tab="candidates">候选稿</button>
+    <button data-tab="inbox">待你决定 <span id="inboxCount" class="count" hidden></span></button>
+  </nav>
+
+  <main>
+    <section id="tab-overview"></section>
+
+    <section id="tab-records" hidden>
+      <div class="tools">
+        <select id="kindFilter">
+          <option value="">全部种类</option>
+          <option value="source">来源卡</option>
+          <option value="claim">论断</option>
+          <option value="outline">大纲</option>
+          <option value="script">讲稿</option>
+          <option value="slide">幻灯片</option>
+          <option value="verification">核验记录</option>
+          <option value="objection">异议</option>
+        </select>
+      </div>
+      <div id="recordList"></div>
+      <div id="recordDetail" class="detail" hidden></div>
+    </section>
+
+    <section id="tab-trace" hidden>
+      <form id="traceForm" class="tools">
+        <input id="traceId" placeholder="编号，例如 SL001 / C001 / S001" pattern="[A-Z]{1,2}\d{3,6}">
+        <button>追溯</button>
+      </form>
+      <div id="traceOut"></div>
+    </section>
+
+    <section id="tab-commits" hidden><div id="commitList"></div></section>
+
+    <section id="tab-candidates" hidden>
+      <div id="candidateList"></div>
+      <h3>以主持人身份提交</h3>
+      <p class="hint">
+        每条改动：新建写 <code>kind</code>、<code>expected_version: 0</code>，可用 <code>tmp</code>（如 <code>$s1</code>）让同一次提交里的论断引用它；
+        修改写 <code>id</code> 和当前版本 <code>expected_version</code>。引用一律写成 <code>{"id","version"}</code>。
+        提交后先存为候选稿，再点“晋升”写入正式区。
+      </p>
+      <div class="tools">
+        <button type="button" data-example="source">示例：来源卡</button>
+        <button type="button" data-example="chain">示例：来源＋论断＋页面</button>
+      </div>
+      <textarea id="changes" spellcheck="false" rows="16"></textarea>
+      <div class="tools">
+        <button id="submit" type="button">提交为候选稿</button>
+        <span id="submitOut" class="hint"></span>
+      </div>
+    </section>
+
+    <section id="tab-inbox" hidden><div id="inboxList"></div></section>
+  </main>
+
+  <div id="toast" class="toast" hidden></div>
+  <script type="module" src="/workbench.js"></script>
+</body>
+</html>
