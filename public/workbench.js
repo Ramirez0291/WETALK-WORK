@@ -1,4 +1,4 @@
-// 工坊页面：项目概况、记录与派生状态、追溯、提交与留档、候选稿、待你决定。
+// 工坊页面：项目概况、任务、分工、竞争、记录与派生状态、追溯、研讨、提交与留档、候选稿、待你决定。
 const $ = (s) => document.querySelector(s);
 const TOKEN = document.querySelector('meta[name="wb-host-token"]').content;
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
@@ -42,7 +42,19 @@ async function loadProjects(select) {
   const want = select ?? new URLSearchParams(location.search).get('p') ?? localStorage.getItem('wb.project');
   project = list.some((p) => p.name === want) ? want : list[0]?.name ?? null;
   sel.value = project ?? '';
-  render();
+  await render();
+  // 从研讨室回来（?r=编号）：打开那条记录或那次竞争
+  const r = new URLSearchParams(location.search).get('r');
+  if (r && project && !loadProjects.opened) {
+    loadProjects.opened = true;
+    if (/^K\d{3,6}$/.test(r)) {
+      document.querySelector('#tabs [data-tab="compete"]').click();
+      setTimeout(() => showCompetition(r).catch(fail), 100);
+    } else if (/^[A-Z]{1,2}\d{3,6}$/.test(r)) {
+      document.querySelector('#tabs [data-tab="records"]').click();
+      setTimeout(() => showRecord(r).catch(fail), 100);
+    }
+  }
 }
 
 $('#project').onchange = (e) => {
@@ -89,6 +101,8 @@ async function render() {
     // 打开着的记录详情（例如核验结果陆续回来）一起刷新；正在填表单时不刷，免得冲掉输入
     const box = $('#recordDetail');
     if (tab === 'records' && openRecord && !box.hidden && !box.contains(document.activeElement) && !box.querySelector('details[open]')) await showRecord(openRecord, { scroll: false });
+    const kb = $('#competitionDetail');
+    if (tab === 'compete' && openCompetition && !kb.hidden && !kb.contains(document.activeElement)) await showCompetition(openCompetition, { scroll: false });
   } catch (e) {
     fail(e);
   }
@@ -246,9 +260,10 @@ const VIEWS = {
     const label = {
       write_fault: '写入故障：已停止接受写入，请重启服务完成恢复', external_change: '服务进程之外改过的记录文件', bad_record_file: '读不出来的记录文件', archive_failed: 'git 留档失败',
       task_failed: '任务失败（尝试次数用完，不再自动重派）', task_needs_user: '任务待你决定', budget_exceeded: '项目用量已到上限',
-      objection_needs_user: '异议待你裁决', claim_disputed: '论断的核验结论不一致',
+      objection_needs_user: '异议待你裁决', claim_disputed: '论断的核验结论不一致', competition: '竞争需要你处理',
     };
-    const where = (i) => (i.objection || i.claim ? `<a href="#" data-goto="${esc(i.objection ?? i.claim)}"><code>${esc(i.objection ?? i.claim)}</code></a>` : `<code>${esc(i.path ?? i.cid ?? i.task ?? '')}</code>`);
+    const where = (i) => (i.competition ? `<a href="#" data-k="${esc(i.competition)}"><code>${esc(i.competition)}</code></a>`
+      : i.objection || i.claim ? `<a href="#" data-goto="${esc(i.objection ?? i.claim)}"><code>${esc(i.objection ?? i.claim)}</code></a>` : `<code>${esc(i.path ?? i.cid ?? i.task ?? '')}</code>`);
     $('#inboxList').innerHTML = items.length
       ? `<div class="wrap"><table><tr><th>类型</th><th>位置</th><th>说明</th></tr>
         ${items.map((i) => `<tr><td>${esc(label[i.type] ?? i.type)}</td><td>${where(i)}</td>
@@ -261,6 +276,63 @@ const VIEWS = {
       document.querySelector('#tabs [data-tab="records"]').click();
       setTimeout(() => showRecord(a.dataset.goto).catch(fail), 100);
     };
+    for (const a of document.querySelectorAll('#inboxList [data-k]')) a.onclick = (e) => {
+      e.preventDefault();
+      document.querySelector('#tabs [data-tab="compete"]').click();
+      setTimeout(() => showCompetition(a.dataset.k).catch(fail), 100);
+    };
+  },
+
+  // ---------- 分工 ----------
+  async divide() {
+    const [list, o] = await Promise.all([api('GET', P('/divisions')), api('GET', P()), loadPeople()]);
+    const types = Object.entries(o.config.modes).filter(([, m]) => m === 'divide').map(([t]) => t);
+    const sel = $('#dvType');
+    if (sel.options.length !== types.length) sel.innerHTML = types.map((t) => `<option value="${esc(t)}">${esc(t)}</option>`).join('');
+    peopleBoxes($('#dvPeople'), 'dv');
+    $('#divisionList').innerHTML = list.length
+      ? list.slice().reverse().map((d) => `<div class="panel">
+          <h4><code>${esc(d.id)}</code> ${esc(d.title)} <span class="hint">${esc(d.type)} · 完成 ${d.done}/${d.of}</span></h4>
+          <div class="wrap"><table><tr><th>份</th><th>任务</th><th>参与者</th><th>分到的输入</th><th>状态</th><th>写进正式区的记录</th></tr>
+          ${d.parts.map((x) => `<tr><td>${x.part}/${d.of}</td><td><code>${esc(x.task)}</code></td><td>${esc(x.participant)}</td>
+            <td>${x.inputs.map((i) => `<code>${esc(i.id)}</code>@${i.version}`).join('、')}${x.items.length ? `<div class="hint">${x.items.map(esc).join('<br>')}</div>` : ''}</td>
+            <td>${badge(...(TASK_STATE[x.state] ?? [x.state, 'b-muted']))}<div class="hint">${esc(x.reason ?? '')}</div></td>
+            <td>${x.records.map((r) => `<a href="#" data-goto="${esc(r.id)}"><code>${esc(r.id)}</code></a> v${r.version}`).join('、') || '<span class="hint">—</span>'}</td></tr>`).join('')}
+          </table></div></div>`).join('')
+      : '<p class="hint">还没有分工。</p>';
+    for (const a of document.querySelectorAll('#divisionList [data-goto]')) a.onclick = (e) => {
+      e.preventDefault();
+      document.querySelector('#tabs [data-tab="records"]').click();
+      setTimeout(() => showRecord(a.dataset.goto).catch(fail), 100);
+    };
+  },
+
+  // ---------- 竞争 ----------
+  async compete() {
+    const [list, o] = await Promise.all([api('GET', P('/competitions')), api('GET', P()), loadPeople()]);
+    const types = Object.entries(o.config.modes).filter(([, m]) => m === 'compete').map(([t]) => t);
+    const sel = $('#kType');
+    if (sel.options.length !== types.length) sel.innerHTML = types.map((t) => `<option value="${esc(t)}">${esc(t)}</option>`).join('');
+    peopleBoxes($('#kPeople'), 'k');
+    $('#kNeed').textContent = `选 ${o.config.compete.drafts} 位不同的起草者（compete.drafts）`;
+    $('#competitionList').innerHTML = list.length
+      ? `<div class="wrap"><table><tr><th>竞争</th><th>题目</th><th>类型</th><th>进度</th><th>结果</th><th>更新</th></tr>
+        ${list.slice().reverse().map((k) => `<tr class="click" data-k="${esc(k.id)}"><td><code>${esc(k.id)}</code></td><td>${esc(k.title)}</td><td>${esc(k.type)}</td>
+          <td>${badge(...(K_STAGE[k.stage] ?? [k.stage, 'b-muted']))}</td>
+          <td>${k.selection ? `${esc(k.selection.label)} → <code>${esc(k.selection.record.id)}</code>` : ''}${k.patches ? `<div class="hint">移植补丁 ${k.patches} 条</div>` : ''}</td>
+          <td class="hint">${time(k.updated_at)}</td></tr>`).join('')}</table></div>`
+      : '<p class="hint">还没有竞争。</p>';
+    for (const tr of document.querySelectorAll('#competitionList tr.click')) tr.onclick = () => showCompetition(tr.dataset.k).catch(fail);
+  },
+
+  // ---------- 研讨：这个项目里开的议题 ----------
+  async talk() {
+    const list = await api('GET', `/api/threads?project=${encodeURIComponent(project)}`);
+    $('#threadList').innerHTML = list.length
+      ? `<div class="wrap"><table><tr><th>议题</th><th>引出它的记录</th><th>发言</th><th>最近</th><th></th></tr>
+        ${list.map((t) => `<tr><td>${esc(t.title)}</td><td>${t.ref ? `<code>${esc(t.ref)}</code>` : ''}</td><td>${t.postCount}</td><td class="hint">${time(t.lastAt)}</td>
+          <td><a href="/talk#/t/${t.id}">在研讨室打开 →</a></td></tr>`).join('')}</table></div>`
+      : '<p class="hint">这个项目里还没有研讨。</p>';
   },
 };
 
@@ -284,12 +356,13 @@ async function showRecord(id, { scroll = true } = {}) {
     ${r.kind === 'verification' ? `<p>核验者：${esc(who(r.record.verifier))} · 结论：${badge(...VER[r.record.verdict])}</p><p>${esc(r.record.reason)}</p>${r.record.support_quote ? `<div class="quote">${esc(r.record.support_quote.id)}@${r.record.support_quote.version}：${esc(r.record.support_quote.quote)}</div>` : ''}` : ''}
     ${r.kind !== 'claim' && r.objections.length ? `<p>异议：${r.objections.map(link).join('、')}</p>` : ''}
     ${r.kind !== 'claim' && r.kind !== 'objection' ? objectionForm(r) : ''}
-    <p><button data-trace="${id}">追溯</button></p>
+    <p><button data-trace="${id}">追溯</button> <button data-talk="${id}">开研讨</button></p>
     <pre>${esc(JSON.stringify(r.record, null, 2))}</pre>
     <h4>历史版本</h4>
     <ul>${r.history.map((h) => `<li>v${h.version} · 提交 ${esc(h.commit ?? '-')} · ${time(h.updated_at)} · ${esc(h.provenance?.participant ?? h.provenance?.kind ?? '')}</li>`).join('')}</ul>`;
   bindLinks(box);
   bindContract1(box, r);
+  box.querySelector('[data-talk]').onclick = () => startTalk(r);
   if (scroll) box.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
 }
 
@@ -496,10 +569,7 @@ async function showPacket(id) {
 
 $('#newTask').onsubmit = async (e) => {
   e.preventDefault();
-  const inputs = $('#taskInputs').value.split(/[,，\s]+/).filter(Boolean).map((x) => {
-    const [id, v] = x.split('@');
-    return { id, version: Number(v) };
-  });
+  const inputs = parseRefs($('#taskInputs').value);
   try {
     const t = await api('POST', P('/tasks'), { type: $('#taskType').value, title: $('#taskTitle').value, goal: $('#taskGoal').value, inputs });
     toast(`已新建任务 ${t.id}（${TASK_STATE[t.state]?.[0] ?? t.state}）`);
@@ -508,6 +578,230 @@ $('#newTask').onsubmit = async (e) => {
     fail(err);
   }
   VIEWS.tasks();
+};
+
+// ---------- 参与者、输入 ----------
+
+async function loadPeople() {
+  people = (await api('GET', '/api/state')).participants.filter((x) => x.available);
+}
+// 参与者勾选框（重画时保留已勾选的）
+function peopleBoxes(box, name) {
+  const was = new Set([...box.querySelectorAll('input:checked')].map((x) => x.value));
+  box.innerHTML = `<span class="hint">参与者：</span><span class="people">${people.map((p) => `<label><input type="checkbox" name="${name}" value="${esc(p.id)}" ${was.has(p.id) ? 'checked' : ''}> ${esc(p.name)}</label>`).join('') || '<span class="hint">没有可用的参与者</span>'}</span>`;
+}
+const checked = (name) => [...document.querySelectorAll(`input[name="${name}"]:checked`)].map((x) => x.value);
+const parseRefs = (text) => text.split(/[,，\s]+/).filter(Boolean).map((x) => {
+  const [id, v] = x.split('@');
+  return { id, version: Number(v) };
+});
+
+// ---------- 分工 ----------
+
+$('#newDivision').onsubmit = async (e) => {
+  e.preventDefault();
+  try {
+    const items = $('#dvItems').value.split(/\r?\n/).map((x) => x.trim()).filter(Boolean);
+    const r = await api('POST', P('/divide'), { type: $('#dvType').value, title: $('#dvTitle').value, goal: $('#dvGoal').value, inputs: parseRefs($('#dvInputs').value), items, participants: checked('dv') });
+    const bad = r.dispatched.filter((x) => !x.dispatched);
+    toast(`已发起分工 ${r.id}：${r.parts.length} 份${bad.length ? `；没派发出去：${bad.map((x) => `${x.task}（${x.error}）`).join('；')}` : ''}`, bad.length > 0);
+    $('#dvTitle').value = $('#dvGoal').value = $('#dvInputs').value = $('#dvItems').value = '';
+  } catch (err) {
+    fail(err);
+  }
+  VIEWS.divide();
+};
+
+// ---------- 竞争 ----------
+
+const K_STAGE = {
+  drafting: ['密封起草中', 'b-warn'], insufficient: ['有效方案不足两份', 'b-bad'], review_ready: ['待发起匿名评审', 'b-warn'], reviewing: ['匿名评审中', 'b-warn'],
+  selecting: ['待你选定', 'b-bad'], patching: ['移植补丁', 'b-warn'], closed: ['已结束', 'b-ok'], cancelled: ['已取消', 'b-muted'],
+};
+const K_STEPS = [['drafting', '密封起草'], ['review_ready', '揭晓'], ['reviewing', '匿名评审'], ['selecting', '选定'], ['patching', '移植补丁'], ['closed', '结束']];
+const POS = { before: '插到这一节之前', after: '插到这一节之后', start: '放进这一节开头', end: '放进这一节末尾', replace: '整节替换' };
+const P_STATE = { proposed: ['待决定', 'b-warn'], accepted: ['已接受', 'b-ok'], rejected: ['已拒绝', 'b-muted'] };
+const H_ACTION = {
+  create: '发起竞争', review: '发起匿名评审', select: '选定方案', patch_proposed: '提出补丁', patch_accepted: '接受补丁', patch_rejected: '拒绝补丁',
+  apply: '书记应用补丁', close: '结束竞争', cancel: '取消竞争', dispatch_failed: '派发失败',
+};
+const secOptions = (k, label) => (k.sections[label] ?? []).map((x) => `<option value="${x.n}">第 ${x.n} 节${x.title ? `：${esc(x.title)}` : ''}</option>`).join('');
+
+$('#newCompetition').onsubmit = async (e) => {
+  e.preventDefault();
+  try {
+    const r = await api('POST', P('/compete'), { type: $('#kType').value, title: $('#kTitle').value, goal: $('#kGoal').value, inputs: parseRefs($('#kInputs').value), participants: checked('k') });
+    const bad = r.dispatched.filter((x) => !x.dispatched);
+    toast(`已发起竞争 ${r.id}${bad.length ? `；没派发出去：${bad.map((x) => `${x.task}（${x.error}）`).join('；')}` : '，方案正在密封起草'}`, bad.length > 0);
+    $('#kTitle').value = $('#kGoal').value = $('#kInputs').value = '';
+    await VIEWS.compete();
+    await showCompetition(r.id);
+  } catch (err) {
+    fail(err);
+  }
+};
+
+let openCompetition = null; // 竞争标签页里打开着的详情：实时事件到来时一起刷新
+async function showCompetition(id, { scroll = true } = {}) {
+  openCompetition = id;
+  const k = await api('GET', P(`/competitions/${id}`));
+  const box = $('#competitionDetail');
+  // 重画时保留展开着的折叠块
+  const open = new Set([...box.querySelectorAll('details[open] > summary')].map((x) => x.textContent));
+  box.hidden = false;
+  const at = K_STEPS.findIndex(([st]) => st === (k.stage === 'insufficient' ? 'review_ready' : k.stage === 'cancelled' ? null : k.stage));
+  const FIN = ['done', 'failed', 'cancelled'];
+  const cur = k.stage === 'drafting' ? k.drafts : k.stage === 'reviewing' ? k.reviews.at(-1).tasks : [];
+  const ready = cur.length && cur.every((t) => t.state === 'submitted' || FIN.includes(t.state)) && cur.some((t) => t.state === 'submitted');
+  const drafters = new Set(k.drafts.map((d) => d.participant));
+  const winner = k.selection?.label;
+  const comments = k.reviews.flatMap((r) => r.comments ?? []);
+  box.innerHTML = `
+    <h3><code>${esc(k.id)}</code> · ${esc(k.title)} ${badge(...K_STAGE[k.stage])}</h3>
+    <div class="steps">${K_STEPS.map(([, label], i) => `<span class="${i === at ? 'on' : at > i ? 'done' : ''}">${esc(label)}</span>`).join('')}</div>
+    <p class="hint">${esc(k.type)}，选定后写成${esc(KIND[k.kind])}。${k.goal ? `要求：${esc(k.goal)}。` : ''}${k.inputs.length ? `输入：${k.inputs.map((x) => `<code>${esc(x.id)}</code>@${x.version}`).join('、')}` : ''}</p>
+
+    <h4>方案（密封起草）</h4>
+    <div class="wrap"><table><tr><th>任务</th><th>起草者</th><th>状态</th><th>独立性</th></tr>
+      ${k.drafts.map((d) => `<tr><td><code>${esc(d.task)}</code></td><td>${esc(d.participant)}</td><td>${badge(...(TASK_STATE[d.state] ?? [d.state, 'b-muted']))}</td>
+        <td>${d.independence === 'unproven' ? badge('独立性未证明，不参与比较', 'b-bad') : d.eligible ? badge('有效', 'b-ok') : ''}</td></tr>`).join('')}</table></div>
+    <p class="hint">${k.mapping_public ? '评审已结束，标签与起草者的对应关系已公开。' : k.label_drafts.length ? '方案已揭晓，按随机标签显示；标签与起草者的对应关系在评审结束后公开。' : '揭晓前方案只在服务进程内存里，这里和任何文件里都看不到。'}</p>
+    ${k.label_drafts.map((l) => `<details><summary>${esc(l.label)}${l.participant ? `（${esc(l.participant)}）` : ''}${l.label === winner ? ' · 选定' : ''}</summary><pre class="clip">${esc(l.text ?? '')}</pre></details>`).join('')}
+    <p>${ready ? `<button class="primary" data-k-act="reveal">揭晓${k.stage === 'drafting' ? '方案' : '评审'}</button>` : ''}
+      ${cur.some((t) => t.state === 'open') ? '<button data-k-act="dispatch">派发还没开始的成员</button>' : ''}</p>
+
+    ${['review_ready', 'selecting'].includes(k.stage) ? `<div class="panel"><h4>${k.reviews.length ? '再发起一轮匿名评审' : '发起匿名评审'}</h4>
+      <div class="people">${people.filter((x) => !drafters.has(x.id)).map((x) => `<label><input type="checkbox" name="kReviewer" value="${esc(x.id)}"> ${esc(x.name)}</label>`).join('') || '<span class="hint">起草者以外没有可用的参与者</span>'}</div>
+      <p class="hint">起草者不能做评审（会认出自己的方案）。评审只拿到标签和去掉署名的正文；每条意见必须指向具体的节、页或论断编号，指不到的退回。</p>
+      <p><button class="primary" data-k-act="review">发起评审</button></p></div>` : ''}
+
+    ${k.reviews.map((r) => `<h4>第 ${r.n} 轮匿名评审</h4>
+      <p class="hint">${r.tasks.map((t) => `<code>${esc(t.task)}</code> ${esc(t.reviewer)} ${badge(...(TASK_STATE[t.state] ?? [t.state, 'b-muted']))}`).join('　')}</p>
+      ${r.comments ? (r.comments.length
+        ? `<div class="wrap"><table><tr><th>意见</th><th>位置</th><th>内容</th></tr>${r.comments.map((c) => `<tr><td><code>${esc(c.id)}</code></td><td>${esc(c.where)}</td><td>${esc(c.comment)}</td></tr>`).join('')}</table></div>`
+        : '<p class="hint">没有有效意见。</p>')
+        + (r.returned.length ? `<details><summary>退回 ${r.returned.length} 条</summary><ul>${r.returned.map((x) => `<li>${esc(x.text)} <span class="hint">— ${esc(x.reason)}</span></li>`).join('')}</ul></details>` : '')
+        : '<p class="hint">评审进行中：全部揭晓后才解析意见。</p>'}`).join('')}
+
+    ${k.stage === 'selecting' ? `<div class="panel"><h4>选定一份</h4>
+      <p><select id="kLabel">${k.label_drafts.map((l) => `<option value="${esc(l.label)}">${esc(l.label)}（${esc(l.participant ?? '')}）</option>`).join('')}</select>
+        <input id="kReason" placeholder="选定的理由（必填）" size="40"> <button class="primary" data-k-act="select">选定</button></p>
+      <p class="hint">选定的方案原样写成正式${esc(KIND[k.kind])}，内容来源记为它的起草者。</p></div>` : ''}
+
+    ${k.selection ? `<div class="panel"><h4>选定结果</h4>
+      <p>${badge(k.selection.label, 'b-ok')} 起草者 ${esc(k.selection.participant ?? '')} · ${esc(k.selection.by)} 选定于 ${time(k.selection.at)} · 理由：${esc(k.selection.reason)}</p>
+      <p>正式${esc(KIND[k.kind])}：<a href="#" data-goto="${esc(k.selection.record.id)}"><code>${esc(k.selection.record.id)}</code></a>
+        ${k.record ? `当前 v${k.record.version}${k.record.diverged ? ` ${badge('已在竞争之外被改过，书记不再覆盖', 'b-warn')}` : ''}` : ''} <span class="hint">书记上次写的是 v${k.applied?.version}</span></p>
+      ${k.record ? `<details><summary>当前正文</summary><pre class="clip">${esc(k.record.body)}</pre></details>` : ''}</div>
+      ${patchesPanel(k, comments)}` : ''}
+    ${k.minority ? minorityPanel(k) : ''}
+
+    <p>${k.stage === 'patching' ? '<button data-k-act="close">结束竞争</button>' : ''}
+      ${!k.selection && !['cancelled', 'closed'].includes(k.stage) ? '<button data-k-act="cancel">取消竞争</button>' : ''}</p>
+    <details><summary>流程记录（${k.history.length} 步）</summary><ul>${k.history.map((h) => `<li>${time(h.at)} · ${esc(h.by ?? '')} · ${esc(H_ACTION[h.action] ?? h.action)}${h.patch ? ` ${esc(h.patch)}` : ''}${h.label ? ` ${esc(h.label)}` : ''}${h.reason ? `：${esc(h.reason)}` : ''}</li>`).join('')}</ul></details>`;
+  for (const x of box.querySelectorAll('details > summary')) if (open.has(x.textContent)) x.parentElement.open = true;
+  bindLinks(box);
+  bindCompetition(box, k);
+  if (scroll) box.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+}
+
+function patchesPanel(k, comments) {
+  const losing = Object.keys(k.sections).filter((l) => l !== k.selection.label);
+  const unapplied = k.patches.filter((p) => p.state === 'accepted' && !p.applied && !p.skipped).length;
+  const rows = k.patches.map((p) => `<tr><td><code>${esc(p.id)}</code></td>
+    <td>${esc(p.from.draft)} 第 ${p.from.section} 节${p.from.quote != null ? '中的一段' : '（整节）'}</td>
+    <td>底稿第 ${p.to.section} 节 · ${esc(POS[p.to.position])}</td>
+    <td><pre class="clip">${esc(p.content)}</pre>${p.note ? `<div class="hint">${esc(p.note)}</div>` : ''}${p.comment ? `<div class="hint">对应评审意见 ${esc(p.comment)}</div>` : ''}</td>
+    <td class="hint">${esc(who(p.proposed_by))}</td>
+    <td>${badge(...P_STATE[p.state])}${p.decision ? `<div class="hint">${esc(p.decision.by)}${p.decision.reason ? `：${esc(p.decision.reason)}` : ''}</div>` : ''}${p.applied ? `<div class="hint">已应用到 v${p.applied.version}</div>` : ''}${p.skipped ? `<div class="hint">${esc(p.skipped)}</div>` : ''}
+      ${p.state === 'proposed' && k.stage === 'patching' ? `<div><input data-p-reason="${esc(p.id)}" placeholder="理由（拒绝时必填）" size="16"> <button data-p-decide="${esc(p.id)}" data-d="accept">接受</button> <button data-p-decide="${esc(p.id)}" data-d="reject">拒绝</button></div>` : ''}</td></tr>`).join('');
+  return `<div class="panel"><h4>移植补丁</h4>
+    <p class="hint">从落选方案里搬运整节或其中逐字的一段，放到底稿（选定的方案）某一节的前后、节首节尾，或整节替换；节号按底稿原来的分节。每条补丁都要你接受或拒绝，书记只应用接受了的，底稿其余部分一个字不改。</p>
+    ${k.patches.length ? `<div class="wrap"><table><tr><th>补丁</th><th>从</th><th>到</th><th>搬运的原文</th><th>提出者</th><th>决定</th></tr>${rows}</table></div>` : '<p class="hint">还没有补丁。</p>'}
+    ${unapplied && k.stage === 'patching' ? `<p><button class="primary" data-k-act="apply">让书记应用 ${unapplied} 条已接受的补丁</button></p>` : ''}
+    ${k.stage === 'patching' && losing.length ? `<details><summary>提出一条补丁</summary>
+      <p>从 <select id="pFrom">${losing.map((l) => `<option value="${esc(l)}">${esc(l)}</option>`).join('')}</select>
+        <select id="pFromSec">${secOptions(k, losing[0])}</select>
+        <input id="pQuote" placeholder="只搬其中一段：逐字粘贴原文（留空就是整节）" size="34"></p>
+      <p>到底稿 <select id="pToSec">${secOptions(k, k.selection.label)}</select>
+        <select id="pPos">${k.positions.map((x) => `<option value="${x}">${esc(POS[x])}</option>`).join('')}</select></p>
+      <p><input id="pNote" placeholder="说明（例如：把乙第 1 节的开场问题移到甲第 1 节开头）" size="46">
+        <select id="pComment"><option value="">不对应评审意见</option>${comments.map((c) => `<option value="${esc(c.id)}">${esc(c.id)} ${esc(c.where)}</option>`).join('')}</select></p>
+      <p><button data-k-act="propose">提出补丁</button></p></details>` : ''}
+  </div>`;
+}
+
+function minorityPanel(k) {
+  const m = k.minority;
+  return `<div class="panel"><h4>少数意见记录</h4>
+    <p class="hint">没有进入正式${esc(KIND[k.kind])}的内容都留在这里：被拒的补丁（连同理由）、没被任何已接受补丁采纳的评审意见，以及落选方案原文。</p>
+    ${m.rejected_patches.length ? `<p>被拒的补丁：</p><ul>${m.rejected_patches.map((p) => `<li><code>${esc(p.id)}</code> ${esc(p.from.draft)} 第 ${p.from.section} 节 → 底稿第 ${p.to.section} 节（${esc(POS[p.to.position])}）<span class="hint"> — ${esc(p.by ?? '')}：${esc(p.reason ?? '')}</span></li>`).join('')}</ul>` : ''}
+    ${m.skipped_patches.length ? `<p>接受了但没有应用的补丁：</p><ul>${m.skipped_patches.map((p) => `<li><code>${esc(p.id)}</code> <span class="hint">${esc(p.reason)}</span></li>`).join('')}</ul>` : ''}
+    ${m.unadopted_comments.length ? `<p>没被采纳的评审意见：</p><ul>${m.unadopted_comments.map((c) => `<li><code>${esc(c.id)}</code> ${esc(c.where)}：${esc(c.comment)}</li>`).join('')}</ul>` : ''}
+    <p>落选方案：${m.losing_drafts.map((d) => `${esc(d.label)}（任务 <code>${esc(d.task ?? '')}</code>）`).join('、') || '无'}</p></div>`;
+}
+
+function bindCompetition(box, k) {
+  const go = (tail, body, msg) => api('POST', P(`/competitions/${k.id}${tail}`), body)
+    .then(() => toast(msg))
+    .catch(fail)
+    .finally(() => {
+      showCompetition(k.id, { scroll: false }).catch(fail);
+      VIEWS.compete().catch(fail);
+    });
+  const acts = {
+    reveal: () => go('/reveal', {}, '已揭晓'),
+    dispatch: () => go('/dispatch', {}, '已派发'),
+    review: () => go('/review', { reviewers: [...box.querySelectorAll('[name="kReviewer"]:checked')].map((x) => x.value) }, '已发起匿名评审'),
+    select: () => go('/select', { label: $('#kLabel').value, reason: $('#kReason').value }, '已选定，写成了正式作品'),
+    propose: () => go('/patches', {
+      from: { draft: $('#pFrom').value, section: Number($('#pFromSec').value), quote: $('#pQuote').value || undefined },
+      to: { section: Number($('#pToSec').value), position: $('#pPos').value },
+      note: $('#pNote').value || undefined, comment: $('#pComment').value || undefined,
+    }, '已提出补丁'),
+    apply: () => go('/apply', {}, '书记已应用接受了的补丁'),
+    close: () => confirm('结束这次竞争？结束后不能再提补丁。') && go('/close', {}, '竞争已结束'),
+    cancel: () => confirm('取消这次竞争？进行中的任务会一起取消。') && go('/cancel', {}, '竞争已取消'),
+  };
+  for (const b of box.querySelectorAll('[data-k-act]')) b.onclick = () => acts[b.dataset.kAct]();
+  const from = box.querySelector('#pFrom');
+  if (from) from.onchange = () => (box.querySelector('#pFromSec').innerHTML = secOptions(k, from.value));
+  for (const b of box.querySelectorAll('[data-p-decide]')) b.onclick = () => {
+    const id = b.dataset.pDecide;
+    const reason = box.querySelector(`[data-p-reason="${id}"]`).value.trim();
+    go(`/patches/${id}/decide`, { decision: b.dataset.d, ...(reason ? { reason } : {}) }, `补丁 ${id} 已${b.dataset.d === 'accept' ? '接受' : '拒绝'}`);
+  };
+}
+
+// ---------- 研讨 ----------
+
+// 从记录详情开研讨：带上这条记录的内容（不带内容生产者的身份），去研讨标签页填好
+function startTalk(r) {
+  const rec = r.record;
+  const lines = [`（工坊项目 ${project} 里的${KIND[r.kind]} ${rec.id} 第 ${rec.version} 版）`];
+  if (r.kind === 'claim') {
+    lines.push(`论断：${rec.text}`);
+    for (const x of rec.sources || []) lines.push(`- 引 ${x.id}@${x.version}${x.quote ? `：“${x.quote}”` : ''}`);
+  } else if (r.kind === 'objection') lines.push(`异议（${O_CATEGORY[rec.category]}，针对 ${rec.target.id}@${rec.target.version}）：${rec.reason}`);
+  else if (r.kind === 'verification') lines.push(`核验（${VER[rec.verdict][0]}，针对 ${rec.target.id}@${rec.target.version}）：${rec.reason}`);
+  else if (r.kind === 'source') lines.push(`来源：${rec.title}${rec.citation ? `，${rec.citation}` : ''}${rec.url ? `，${rec.url}` : ''}`);
+  else lines.push(`${rec.title}${rec.body ? `\n\n${rec.body}` : ''}`);
+  lines.push('', '想讨论的问题：');
+  $('#thTitle').value = `讨论 ${rec.id}：${titleOf(rec)}`.slice(0, 200);
+  $('#thContent').value = lines.join('\n');
+  $('#thRef').value = rec.id;
+  document.querySelector('#tabs [data-tab="talk"]').click();
+  $('#thContent').focus();
+}
+
+$('#newThread').onsubmit = async (e) => {
+  e.preventDefault();
+  try {
+    const r = await api('POST', '/api/threads', { project, title: $('#thTitle').value, content: $('#thContent').value, ref: $('#thRef').value || undefined });
+    location.href = `/talk#/t/${r.thread.id}`;
+  } catch (err) {
+    fail(err);
+  }
 };
 
 loadProjects();

@@ -100,3 +100,13 @@ mark { background: var(--mark); color: inherit; }
 .panel h4 { margin: 8px 0 4px; }
 .panel textarea { width: 100%; box-sizing: border-box; }
 .panel input { max-width: 100%; }
+/* WP5b：分工、竞争、研讨 */
+.wide { width: 100%; }
+.steps { display: flex; flex-wrap: wrap; gap: 4px; margin: 6px 0 10px; }
+.steps span { padding: 2px 9px; border-radius: 9px; border: 1px solid var(--border); color: var(--muted); font-size: 12px; }
+.steps span.on { border-color: var(--accent); color: var(--accent); font-weight: 600; }
+.steps span.done { color: var(--ok); border-color: var(--ok); }
+.people { display: flex; flex-wrap: wrap; gap: 10px; }
+.people label { display: inline-flex; gap: 4px; align-items: center; }
+.clip { max-height: 160px; overflow: auto; }
+details > summary { cursor: pointer; }

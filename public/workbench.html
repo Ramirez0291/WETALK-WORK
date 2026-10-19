@@ -23,8 +23,11 @@
   <nav class="tabs" id="tabs">
     <button data-tab="overview" class="on">概况</button>
     <button data-tab="tasks">任务</button>
+    <button data-tab="divide">分工</button>
+    <button data-tab="compete">竞争</button>
     <button data-tab="records">记录</button>
     <button data-tab="trace">追溯</button>
+    <button data-tab="talk">研讨</button>
     <button data-tab="commits">提交与留档</button>
     <button data-tab="candidates">候选稿</button>
     <button data-tab="inbox">待你决定 <span id="inboxCount" class="count" hidden></span></button>
@@ -80,6 +83,51 @@
     </section>
 
     <section id="tab-inbox" hidden><div id="inboxList"></div></section>
+
+    <section id="tab-divide" hidden>
+      <form id="newDivision" class="panel">
+        <h4>发起分工</h4>
+        <p class="hint">把一组输入拆成互不重叠的几份，轮流分给选中的参与者，每份一个子任务并立即派发。子任务只能写自己那一份：改动或引用别的部分的记录、新建与已有来源同一地址的来源卡，提交入口都会拒绝。</p>
+        <div class="tools">
+          <select id="dvType"></select>
+          <input id="dvTitle" placeholder="标题" maxlength="150">
+          <input id="dvGoal" placeholder="目标（可选）" maxlength="3000" size="34">
+        </div>
+        <div class="tools"><input id="dvInputs" placeholder="要分的记录，例如 S001@1, S002@1" size="44"></div>
+        <textarea id="dvItems" rows="3" placeholder="要分的条目，每行一项（例如待找资料的子题或网址；可以和记录一起分）"></textarea>
+        <div class="tools" id="dvPeople"></div>
+        <div class="tools"><button class="primary">发起分工</button></div>
+      </form>
+      <div id="divisionList"></div>
+    </section>
+
+    <section id="tab-compete" hidden>
+      <form id="newCompetition" class="panel">
+        <h4>发起竞争</h4>
+        <p class="hint">几位起草者同时独立起草（密封，完成前互不可见）→ 揭晓 → 匿名评审（每条意见必须指向具体的节、页或论断编号，指不到的退回）→ 你选定一份 → 落选方案里值得保留的内容写成移植补丁，逐条接受或拒绝 → 书记只应用通过的补丁。</p>
+        <div class="tools">
+          <select id="kType"></select>
+          <input id="kTitle" placeholder="题目" maxlength="200" size="28">
+          <input id="kGoal" placeholder="要求（可选）" maxlength="4000" size="28">
+          <input id="kInputs" placeholder="输入，例如 C001@1, C002@1" size="24">
+        </div>
+        <div class="tools" id="kPeople"></div>
+        <div class="tools"><button class="primary">发起竞争</button> <span id="kNeed" class="hint"></span></div>
+      </form>
+      <div id="competitionList"></div>
+      <div id="competitionDetail" class="detail" hidden></div>
+    </section>
+
+    <section id="tab-talk" hidden>
+      <form id="newThread" class="panel">
+        <h4>在这个项目里开研讨</h4>
+        <p><input id="thTitle" placeholder="议题" maxlength="200" class="wide"></p>
+        <textarea id="thContent" rows="5" placeholder="开题发言：想和 AI 们讨论什么。从记录详情点“开研讨”会自动带上那条记录的内容"></textarea>
+        <input id="thRef" type="hidden">
+        <div class="tools"><button class="primary">开研讨，去研讨室</button> <span class="hint">记忆用这个项目自己的空间（工坊·项目名·研讨），与别的项目、全局共享记忆互不影响。</span></div>
+      </form>
+      <div id="threadList"></div>
+    </section>
 
     <section id="tab-tasks" hidden>
       <form id="newTask" class="tools">

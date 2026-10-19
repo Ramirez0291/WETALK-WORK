@@ -1,6 +1,10 @@
 // UI messages only. Discussion content and stored records are never translated.
 export default {
   "1 条": "1 post",
+  "工坊项目里开的研讨": "Discussion opened from a workbench project",
+  "项目 {0} · {1} → 工坊": "Project {0} · {1} → Workbench",
+  "项目 {0} → 工坊": "Project {0} → Workbench",
+  "这个研讨属于工坊里的一个项目": "This discussion belongs to a workbench project",
   "全局共享（长期记忆）": "Shared (long-term memory)",
   "主持人": "Moderator",
   "默认": "Default",

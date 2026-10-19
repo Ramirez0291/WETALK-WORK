@@ -14,6 +14,9 @@ import { createTaskBoard } from './lib/workbench/tasks.mjs';
 import { createRunner } from './lib/workbench/runner.mjs';
 import { createSealedStore } from './lib/workbench/visibility.mjs';
 import { createEvidenceFlow } from './lib/workbench/evidence.mjs';
+import { createCompetitions } from './lib/workbench/compete.mjs';
+import { createDivisions } from './lib/workbench/divide.mjs';
+import { phaseSpace } from './lib/workbench/phases.mjs';
 import { RULES, tally, decideOutcome, buildVotePrompt, parseVote, buildDraftPrompt, parseDraft, resultText } from './lib/voting.mjs';
 import { createWorkbench, loadDefaults } from './lib/workbench/project.mjs';
 import { workbenchRoutes } from './lib/workbench/http.mjs';
@@ -82,6 +85,9 @@ const runner = createRunner({
   templateText: fs.readFileSync(path.join(ROOT, 'templates', 'project', 'project.md'), 'utf8'),
   timeoutMs: (config.timeoutSec || 300) * 1000, onEvent: wbEvent,
 });
+// 工作方式（WP5b）：分工（拆成互不重叠的几份）与竞争（密封起草 → 匿名评审 → 选定 → 移植补丁 → 书记）
+const competitions = createCompetitions({ workbench, gateway, board, runner, participants: participantById, onEvent: wbEvent });
+const divisions = createDivisions({ workbench, gateway, board, runner, participants: participantById });
 // 任务的重启恢复：服务自己发起的调用已不存在，这些尝试释放；已交稿但没来得及晋升的，补一次晋升
 for (const { name } of workbench.list()) {
   const released = board.recover(name);
@@ -848,15 +854,23 @@ const routes = [
 
   // ---------- 议题 ----------
 
-  ['GET', /^\/api\/threads$/, () => store.listThreads()],
+  // ?project=名称：只列这个工坊项目里开的研讨
+  ['GET', /^\/api\/threads$/, (req) => {
+    const project = new URL(req.url, 'http://localhost').searchParams.get('project');
+    return store.listThreads().filter((t) => !project || t.project === project);
+  }],
 
   ['POST', /^\/api\/threads$/, async (req) => {
     const body = await readJson(req);
     const title = str(body.title, 'title', 200);
     const content = str(body.content, 'content', 20000, false);
     const memoryMode = ['rw', 'ro', 'off'].includes(body.memoryMode) ? body.memoryMode : 'rw';
-    const memorySpace = resolveSpace(body.memorySpace);
-    const { thread, post } = store.createThread({ title, content, memoryMode, memorySpace, ...authorOf(body) });
+    // 工坊项目里开的研讨：记下项目与引出它的记录；记忆默认用这个项目自己的空间（契约四：项目之间互不影响）
+    let project = null;
+    if (body.project != null && body.project !== '') project = workbench.get(String(body.project)).name;
+    const ref = typeof body.ref === 'string' && /^(?:[A-Z]{1,2}\d{3,6}|K\d{3,6})$/.test(body.ref) ? body.ref : null;
+    const memorySpace = project && (body.memorySpace == null || body.memorySpace === '') ? phaseSpace(store, project, '研讨').id : resolveSpace(body.memorySpace);
+    const { thread, post } = store.createThread({ title, content, memoryMode, memorySpace, project, ref, ...authorOf(body) });
     broadcast({ type: 'thread', thread });
     if (post) broadcast({ type: 'post', post });
     return { thread, post };
@@ -1197,7 +1211,7 @@ const routes = [
   }],
 
   ...workbenchRoutes({
-    workbench, gateway, web, usage, board, runner, sealed, flow, readJson, hostToken: HOST_TOKEN, humanName: config.humanName,
+    workbench, gateway, web, usage, board, runner, sealed, flow, competitions, divisions, readJson, hostToken: HOST_TOKEN, humanName: config.humanName,
     participantByName: (name) => findParticipant(name),
     participants: () => participants,
   }),

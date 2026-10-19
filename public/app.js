@@ -154,6 +154,7 @@ function renderThreads() {
         <div class="t-meta">
           ${state.running.get(t.id)?.running ? ui('<span class="live-dot" title="讨论进行中"></span>') : ''}
           ${t.memoryMode === 'off' ? ui('<span class="mode-tag" title="记忆关闭">无记忆</span>') : t.memoryMode === 'ro' ? ui('<span class="mode-tag" title="记忆只读">只读</span>') : ''}
+          ${t.project ? ui`<span class="mode-tag" title="工坊项目里开的研讨">${esc(t.project)}</span>` : ''}
           <span>${t.postCount === 1 ? ui('1 条') : ui`${t.postCount} 条`}</span><span>·</span><span>${fmtTime(t.lastAt)}</span>
         </div>
       </a>`)
@@ -605,6 +606,13 @@ function renderPosts({ keepScroll = false } = {}) {
 function renderAll({ keepScroll = false } = {}) {
   const t = state.current;
   $('#threadTitle').textContent = t ? t.title : 'WeTalk';
+  // 工坊项目里开的研讨：回到项目（和引出它的记录）
+  const link = $('#projectLink');
+  link.hidden = !t?.project;
+  if (t?.project) {
+    link.href = `/?p=${encodeURIComponent(t.project)}${t.ref ? `&r=${encodeURIComponent(t.ref)}` : ''}`;
+    link.textContent = t.ref ? ui`项目 ${t.project} · ${t.ref} → 工坊` : ui`项目 ${t.project} → 工坊`;
+  }
   document.title = t ? `${t.title} · WeTalk` : ui('WeTalk 研讨室');
   $('#stage').hidden = !t;
   $('#composer').hidden = !t;
