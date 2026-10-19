@@ -727,3 +727,56 @@ test('评审 R6：论断编号按完整编号匹配：C100 不会被当成 C1000
   assert.equal(review(json([{ draft: '方案甲', claim: 'C100', comment: '要核对' }]), '只用了 C1000').comments.length, 0);
   assert.deepEqual(claimIdsIn('C100、C1000，XC100，C12345a，（C200）C200'), ['C100', 'C1000', 'C200']);
 });
+
+// ---------- WP5b 第二轮复审（Astra，R2 后续）----------
+
+test('复审 R2：书记的结果确认不了时补丁冻结（提出、接受、拒绝都 409）；真实重启提交入口后原样重试完成；修复前已卡住的数据（待办 [P1]、已接受 [P1, P2]）同样能恢复', async () => {
+  const e = await env();
+  await sample(e);
+  const w = world(e, { claude: [DRAFT_A], codex: [DRAFT_B], 'deepseek-pro': REVIEW });
+  const c = w.competitions;
+  const { A, B } = await toSelecting(w, [{ id: 'C001', version: 1 }]);
+  await c.select(P, 'K001', { label: A, reason: '好' }, HUMAN);
+  await c.propose(P, 'K001', { from: { draft: B, section: 2 }, to: { section: 2, position: 'after' } }, HUMAN);
+  await c.decide(P, 'K001', 'P1', { decision: 'accept' }, HUMAN);
+  await c.propose(P, 'K001', { from: { draft: B, section: 3 }, to: { section: 3, position: 'after' } }, HUMAN);
+  // 书记收了稿、还没晋升就中断
+  const promote = e.gw.promote;
+  e.gw.promote = async () => {
+    throw Object.assign(new Error('注入：晋升之前中断'), { status: 503 });
+  };
+  try {
+    await assert.rejects(c.apply(P, 'K001', HUMAN), /注入/);
+  } finally {
+    e.gw.promote = promote;
+  }
+  const file = path.join(e.workbench.get(P).dir, 'competitions', 'K001.json');
+  const frozen = fs.readFileSync(file, 'utf8');
+  assert.deepEqual(JSON.parse(frozen).pending.patches, ['P1']);
+  await assert.rejects(c.propose(P, 'K001', { from: { draft: B, section: 1 }, to: { section: 1, position: 'before' } }, HUMAN), (err) => err.status === 409 && /还没确认/.test(err.message));
+  await assert.rejects(c.decide(P, 'K001', 'P2', { decision: 'accept' }, HUMAN), (err) => err.status === 409 && /还没确认/.test(err.message));
+  await assert.rejects(c.decide(P, 'K001', 'P2', { decision: 'reject', reason: '不要' }, HUMAN), (err) => err.status === 409);
+  assert.equal(fs.readFileSync(file, 'utf8'), frozen, '竞争记录没有被改动');
+  // 修复前的代码能走到的状态：P2 在待办期间被接受了（直接改文件模拟）
+  const stuck = JSON.parse(frozen);
+  Object.assign(stuck.patches.find((p) => p.id === 'P2'), { state: 'accepted', decision: { by: '主持人', at: new Date().toISOString() } });
+  fs.writeFileSync(file, JSON.stringify(stuck, null, 2));
+  // 真实重启提交入口（恢复流程照常跑），再建竞争：原样重试待办 [P1]
+  const { gw, recovered } = await restart(e, { fence: e.board.fence });
+  assert.deepEqual(recovered, { redone: [], dropped: [] });
+  const w2 = world({ ...e, gw }, {});
+  const c2 = w2.competitions;
+  assert.deepEqual(c2.view(P, 'K001').pending.patches, ['P1']);
+  let v = await c2.apply(P, 'K001', HUMAN);
+  let ol = gw.getRecord(P, 'OL001').record;
+  assert.equal(ol.version, 2);
+  assert.ok(ol.body.includes('## 方法') && !ol.body.includes('## 结语'), '这次只应用待办里的 P1');
+  assert.deepEqual([v.pending, v.patches.map((p) => p.applied?.version ?? null)], [undefined, [2, null]]);
+  // 之后照常继续：P2 在第 2 版上应用
+  v = await c2.apply(P, 'K001', HUMAN);
+  ol = gw.getRecord(P, 'OL001').record;
+  assert.equal(ol.version, 3);
+  assert.ok(ol.body.includes('## 结语'));
+  v = await c2.close(P, 'K001', HUMAN);
+  assert.deepEqual([v.stage, v.minority.skipped_patches], ['closed', []]);
+});
