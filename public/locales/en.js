@@ -921,4 +921,8 @@ export default {
   "已导出 {0}": "Exported {0}",
   "已建导出任务 {0}，派发失败：{1}": "Created export task {0}, but dispatch failed: {1}",
   "已派给 {0} 出版式方案（任务 {1}），交来后自动生成": "Sent to {0} for a layout plan (task {1}); the deck is built when it comes back",
+  "现在有问题": "Problems now",
+  "现在的状态": "Current status",
+  "导出之后，论断的核验或异议有了变化（版本没变）。下面是此刻再查一遍的结果；问题解决之前，这份导出不可交付。": "Since the export, verifications or objections on the claims have changed (versions unchanged). Below is the result of checking again now; until these problems are resolved, this export is not deliverable.",
+  "导出时的结果": "Result at export time",
 };

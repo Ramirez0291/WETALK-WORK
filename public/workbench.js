@@ -420,7 +420,7 @@ const VIEWS = {
         ${r.exports.map((x) => `<tr class="click" data-ex="${esc(x.id)}"><td><code>${esc(x.id)}</code> <span class="hint">v${x.version}</span></td><td class="hint">${time(x.at)}</td><td>${x.pages}</td>
           <td>${esc(x.formats.join(' + '))}</td><td>${esc(x.via === 'script' ? ui('脚本') : x.via)}${x.template ? `<div class="hint">${esc(x.template)}${x.skill ? ` · ${esc(x.skill)}` : ''}</div>` : ''}</td>
           <td>${check(x.structure, '')}</td><td>${check(x.readback, ui('无 PPTX'))}</td><td>${check(x.render, x.formats.includes('pptx') ? ui('还没做') : ui('无 PPTX'))}</td>
-          <td>${fresh(x)} ${x.deliverable ? badge(ui('可交付'), 'b-ok') : ''}</td></tr>`).join('')}</table></div>`
+          <td>${fresh(x)} ${x.live && !x.live.ok ? badge(ui('现在有问题'), 'b-bad') : ''} ${x.deliverable ? badge(ui('可交付'), 'b-ok') : ''}</td></tr>`).join('')}</table></div>`
       : ui('<p class="hint">还没有导出。</p>');
     for (const tr of document.querySelectorAll('#exportList tr.click')) tr.onclick = () => showExport(tr.dataset.ex).catch(fail);
     for (const b of document.querySelectorAll('[data-exbuild]')) b.onclick = () => api('POST', P(`/exports/tasks/${b.dataset.exbuild}/build`), {}).then((x) => toast(ui`已生成 ${x.id}`), fail).then(render);
@@ -795,7 +795,9 @@ async function showExport(id, { scroll = true } = {}) {
   box.innerHTML = ui`<h3>导出 <code>${esc(id)}</code> 第 ${rec.version} 版 ${fresh(v)} ${v.deliverable ? badge(ui('可交付'), 'b-ok') : ''}</h3>
     <p class="hint">${rec.slides.map((x) => `<code>${esc(x.id)}@${x.version}</code>`).join(' ')}${rec.template ? ui` · 模板 ${esc(rec.template.name)}` : ''}${rec.skill ? ui` · skill ${esc(rec.skill.name)}` : ''}${rec.plan_task ? ui` · 版式方案来自任务 <code>${esc(rec.plan_task.task)}</code>` : ''}</p>
     <p>${Object.keys(rec.files).map((f) => `<a href="${file(`deck.${f}`)}">${esc(ui`下载 ${f.toUpperCase()}`)}</a>`).join(' · ')}${rd?.pdf ? ` · <a href="${file(`${rd.dir}/${rd.pdf}`)}" target="_blank">PDF</a>` : ''}</p>
-    <h4>结构检查</h4>
+    ${v.live_structure && !v.live_structure.ok ? ui`<h4>现在的状态</h4><p class="hint">导出之后，论断的核验或异议有了变化（版本没变）。下面是此刻再查一遍的结果；问题解决之前，这份导出不可交付。</p>
+      ${v.live_structure.slides.filter((x) => x.issues.some((i) => i.level === 'error')).map((x) => ui`<p><code>${esc(x.id)}</code> ${esc(x.title)}</p>${issueList(x.issues.filter((i) => i.level === 'error'))}`).join('')}` : ''}
+    <h4>结构检查</h4><p class="hint">${esc(ui('导出时的结果'))}</p>
     ${s.ok ? ui('<p class="hint">通过：每个句子都带论断编号或标为非事实，引用的论断都可进入成品，字数与备注都合要求。</p>') : ''}
     ${s.slides.filter((x) => x.issues.length).map((x) => ui`<p><code>${esc(x.id)}</code> ${esc(x.title)} <span class="hint">${x.chars} 字</span></p>${issueList(x.issues)}`).join('')}
     ${rb ? ui`<h4>读回核对</h4>${rb.ok ? ui('<p class="hint">通过：页数、标题、正文、备注与每页的标记都对得上。</p>') : issueList(rb.issues)}` : ''}

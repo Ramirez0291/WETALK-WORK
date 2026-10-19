@@ -128,10 +128,10 @@ test('幻灯片源的约定：句子带论断编号或标为非事实；编号�
     claimInfo: (ref) => ({ text: `论断 ${ref.id}`, sources: [{ title: '某书', locator: '第 3 章', quote: '原文' }] }),
   });
   // 普通段落与要点列表之间空一行（相邻的行在 Markdown 里会并成一段）
-  assert.match(md, /没有证据表明 A 导致 B。\[\^C001\]\n\n- 当地人口约 1200 人\[\^C002\]\n\n下面讲我们的建议。\n/);
+  assert.match(md, /没有证据表明 A 导致 B。\[\^C001@1\]\n\n- 当地人口约 1200 人\[\^C002@1\]\n\n下面讲我们的建议。\n/);
   assert.doesNotMatch(md, /非事实/);
   assert.match(md, /> 备注/);
-  assert.match(md, /\[\^C002\]: C002@1 论断 C002 —— 某书，第 3 章：“原文”/);
+  assert.match(md, /\[\^C002@1\]: C002@1 论断 C002 —— 某书，第 3 章：“原文”/);
 });
 
 test('结构检查：句子没编号也没标非事实、编号不在 claims 里、论断不能进入成品或不是当前版本、字数超限、备注为空都查得出；正常的页面通过', async () => {
@@ -180,7 +180,7 @@ test('脚本导出 Markdown 与 PPTX：写成正式记录 EX001（文件存 blob
   // 文件
   const md = fs.readFileSync(w.exports.file(P, 'EX001', 'deck.md').path, 'utf8');
   assert.match(md, /## 1\. 证据说了什么/);
-  assert.match(md, /\[\^C001\]: C001@1 没有证据表明 A 导致 B —— 某书：“没有证据表明 A 导致 B”/);
+  assert.match(md, /\[\^C001@1\]: C001@1 没有证据表明 A 导致 B —— 某书：“没有证据表明 A 导致 B”/);
   const pptx = w.exports.file(P, 'EX001', 'deck.pptx');
   assert.equal(pptx.filename, `${P}-EX001.pptx`);
   const rb = await pyExport(PYTHON, 'readback', [pptx.path], path.join(tmpBase(), 'rb.json'));
@@ -328,6 +328,12 @@ test('真渲染：故意做出文字溢出、缺字体和图片变形的 PPTX，
     'r = tb.text_frame.paragraphs[0].runs[0]; r.font.size = Pt(24); r.font.name = "NoSuchFont-WB"',
     'img = sys.argv[1] + ".png"; Image.new("RGB", (400, 200), (200, 80, 80)).save(img)',
     's.shapes.add_picture(img, Inches(8), Inches(4), Inches(2), Inches(2))',
+    // 第 2 页（Astra 的复现）：右对齐、不换行、关自动调整的 100×100pt 文本框，文字向左越出、右端仍在框内
+    'from pptx.enum.text import PP_ALIGN, MSO_AUTO_SIZE',
+    's2 = prs.slides.add_slide(prs.slide_layouts[6]); sh = s2.shapes.add_textbox(Pt(300), Pt(200), Pt(100), Pt(100))',
+    'tf = sh.text_frame; tf.word_wrap = False; tf.auto_size = MSO_AUTO_SIZE.NONE',
+    'tf.margin_left = tf.margin_top = tf.margin_bottom = 0; tf.margin_right = Pt(12)',
+    'p = tf.paragraphs[0]; p.alignment = PP_ALIGN.RIGHT; p.text = "AAAAAAAAAAAAAAAA"; p.runs[0].font.size = Pt(20); p.runs[0].font.name = "Segoe UI"',
     'prs.save(sys.argv[1])',
   ].join('\n');
   const made = spawnSync(PYTHON, ['-I', '-c', script, bad], { encoding: 'utf8' });
@@ -339,6 +345,8 @@ test('真渲染：故意做出文字溢出、缺字体和图片变形的 PPTX，
   assert.ok(fs.existsSync(path.join(dir, 'out', 'deck.pdf')) && fs.existsSync(path.join(dir, 'out', 'p01.png')));
   assert.deepEqual(a.pages[0].issues.map((x) => x.code).sort(), ['distorted', 'font_missing', 'off_slide', 'overflow']);
   assert.deepEqual(a.fonts.missing, ['NoSuchFont-WB']);
+  // 只向左越出、仍在页面内：只有 overflow，方向是左
+  assert.deepEqual(a.pages[1].issues.map((x) => [x.code, x.sides]), [['overflow', ['左']]]);
   // 正常导出的样本：渲染检查通过
   const e = await env();
   await sample(e);
@@ -346,4 +354,80 @@ test('真渲染：故意做出文字溢出、缺字体和图片变形的 PPTX，
   await w.exports.create(P, { formats: ['pptx'], via: 'script' }, '主持人');
   const v = await w.exports.render(P, 'EX001', '主持人');
   assert.deepEqual([v.render.engine, v.render.ok, v.render.errors], ['powerpoint', true, 0]);
+});
+
+// ---------- WP7a 评审（Astra，R1–R4）----------
+
+const CODEX = { kind: 'server', participant: 'codex', adapter: 'codex', model: null, verified: true, basis: 'server-invoked' };
+const OBJECTION = { target: { id: 'C001', version: 1 }, category: 'number_error', pointer: { type: 'quote', source: { id: 'S001', version: 1 }, quote: '没有证据表明 A 导致 B' }, reason: '这个说法要再核', state: 'open' };
+const liveMessages = (v) => v.live_structure.slides.flatMap((s) => s.issues.map((i) => i.message)).join('\n');
+
+test('评审 R1：可交付按此刻的状态算——新增阻塞异议、新的不一致核验都不改版本，也会让已有导出不可交付；异议撤回后恢复', async () => {
+  const e = await env();
+  await sample(e);
+  const w = world(e);
+  const ex = (await w.exports.create(P, { formats: ['md'], via: 'script' }, '主持人')).export;
+  assert.deepEqual([ex.deliverable, ex.live.ok], [true, true]);
+  // 新增阻塞异议：论断、页面、导出的版本都没变
+  await asHost(e, [{ kind: 'objection', expected_version: 0, data: OBJECTION }]);
+  let v = w.exports.view(P, 'EX001');
+  assert.deepEqual([v.freshness, v.record.version, v.deliverable, v.live.ok], ['current', 1, false, false]);
+  assert.match(liveMessages(v), /C001 还不能进入成品：有阻塞异议 O001/);
+  assert.equal(v.record.structure.ok, true, '导出时存下的检查结果不变，只是不再代表现在');
+  assert.deepEqual(w.exports.list(P).exports.map((x) => [x.id, x.deliverable, x.live.ok]), [['EX001', false, false]]);
+  // 提出者撤回：恢复可交付
+  await asHost(e, [{ id: 'O001', expected_version: 1, data: { ...OBJECTION, state: 'withdrawn' } }]);
+  assert.equal(w.exports.view(P, 'EX001').deliverable, true);
+  // 另一位核验者（与作者不同厂商）判 unsupported：C002 变成核验结论不一致
+  await asAgent(e, CODEX, [{ kind: 'verification', expected_version: 0, data: { target: { id: 'C002', version: 1 }, source_versions: [{ id: 'S001', version: 1 }], verdict: 'unsupported', reason: '原文说的是记载，不是现状' } }]);
+  v = w.exports.view(P, 'EX001');
+  assert.deepEqual([v.deliverable, v.live.ok], [false, false]);
+  assert.match(liveMessages(v), /C002 还不能进入成品：核验状态为 disputed/);
+});
+
+test('评审 R2：英文句号也断句，每句分别要编号或非事实标记；句后编号前有空格也归前一句；小数、缩写不误断', async () => {
+  const e = await env();
+  await sample(e);
+  const slide = e.gw.getRecord(P, 'SL001').record;
+  const untagged = (body) => checkStructure({ gateway: e.gw, project: P, slides: [{ ...slide, body }], maxChars: 1000 }).slides[0].issues.filter((i) => i.code === 'untagged').map((i) => i.sentence);
+  // Astra 的两种绕过：后一句的编号或标记不再替前一句担保
+  assert.deepEqual(untagged('An unsupported factual sentence. Population is 1200 C001.'), ['An unsupported factual sentence.']);
+  assert.deepEqual(untagged('An unsupported factual sentence. 〔非事实〕Welcome.'), ['An unsupported factual sentence.']);
+  // 句末标点后有空格、再跟编号：仍归前一句（修正前正则里的 \s 写成了 s）
+  assert.deepEqual(untagged('人口是1200。 （C001）〔非事实〕谢谢。'), []);
+  assert.deepEqual(untagged('Growth was 1.5 times, e.g. apples (C001). Dr. Smith agrees C002. Thanks〔非事实〕.'), []);
+  assert.deepEqual(untagged('Fact one C001! Is it true? 〔非事实〕Yes; really C002.'), ['Is it true?']);
+  assert.deepEqual(sentencesOf('He said “yes.” Then left C001.'), ['He said “yes.”', ' Then left C001.']);
+});
+
+test('评审 R3：导出的依据按引用的版本取——论断和来源改版后，旧引用的脚注与讲者备注仍是旧版本的正文与标题；还原不出的版本拒绝导出', { skip: NO_PY }, async () => {
+  const e = await env();
+  await sample(e);
+  const w = world(e);
+  await asAgent(e, DS, [{ id: 'C001', expected_version: 1, data: { type: 'fact', text: 'NEW-CLAIM 改过的说法', sources: [{ id: 'S001', version: 1, quote: '没有证据表明 A 导致 B' }] } }]);
+  await asHost(e, [{ id: 'S001', expected_version: 1, data: { title: 'NEW-TITLE 新书名', url: 'https://example.org/book', text: TEXT } }]);
+  const out = (await w.exports.create(P, { formats: ['md', 'pptx'], via: 'script' }, '主持人')).export;
+  assert.equal(out.structure.ok, false); // 页面引用的是旧版本：结构检查不过，但文件里的依据必须是旧版本
+  const md = fs.readFileSync(w.exports.file(P, out.id, 'deck.md').path, 'utf8');
+  assert.match(md, /\[\^C001@1\]: C001@1 没有证据表明 A 导致 B —— 某书：“没有证据表明 A 导致 B”/);
+  assert.doesNotMatch(md, /NEW-CLAIM|NEW-TITLE/);
+  const rb = await pyExport(PYTHON, 'readback', [w.exports.file(P, out.id, 'deck.pptx').path], path.join(tmpBase(), 'rb.json'));
+  assert.match(rb.slides[0].notes, /C001：没有证据表明 A 导致 B\n/);
+  assert.doesNotMatch(rb.slides[0].notes, /NEW-CLAIM/);
+  // 旧版本的归档副本不在了：还原不出，拒绝导出，不拿新版本顶替
+  fs.rmSync(path.join(e.workbench.get(P).dir, 'archive', 'versions', 'claims', 'C001.v1.json'));
+  await assert.rejects(w.exports.create(P, { formats: ['md'], via: 'script' }, '主持人'), (err) => err.status === 409 && /还原不出 C001@1/.test(err.message));
+});
+
+test('评审 R4：溢出四个方向都查——文字向左、向上越出文本框也算（仍在页面内）；正好在 2pt 容差内的不算', () => {
+  const issues = (shape) => analyze({
+    raw: { engine: 'powerpoint', installed: [], slideWidth: 960, slideHeight: 540, slides: [{ png: 'p01.png', shapes: [shape] }] },
+    readback: { theme_fonts: [], slides: [{ fonts: [], shapes: [] }] }, spec: { slides: [{ id: 'SL001', version: 1 }] },
+  }).pages[0].issues;
+  const box = { name: 'T', text: '字', left: 200, top: 200, width: 100, height: 100 };
+  assert.deepEqual(issues({ ...box, boundLeft: 160, boundTop: 160, boundWidth: 140, boundHeight: 140 }).map((i) => [i.code, i.sides]), [['overflow', ['左', '上']]]);
+  // 右对齐不换行（Astra 实测的数值）：只向左越出 118pt
+  assert.deepEqual(issues({ ...box, left: 300, boundLeft: 182, boundTop: 200, boundWidth: 211.5, boundHeight: 24 }).map((i) => i.sides), [['左']]);
+  assert.deepEqual(issues({ ...box, boundLeft: 210, boundTop: 150, boundWidth: 50, boundHeight: 60 }).map((i) => i.sides), [['上']]);
+  assert.deepEqual(issues({ ...box, boundLeft: 198, boundTop: 198, boundWidth: 104, boundHeight: 104 }), []); // 每边正好 2pt
 });
