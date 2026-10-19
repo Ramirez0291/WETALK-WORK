@@ -17,9 +17,11 @@ import { createEvidenceFlow } from './lib/workbench/evidence.mjs';
 import { createCompetitions } from './lib/workbench/compete.mjs';
 import { createDivisions } from './lib/workbench/divide.mjs';
 import { phaseSpace } from './lib/workbench/phases.mjs';
+import { createScheduler } from './lib/workbench/scheduler.mjs';
+import { cleanConventions } from './lib/workbench/packets.mjs';
 import { RULES, tally, decideOutcome, buildVotePrompt, parseVote, buildDraftPrompt, parseDraft, resultText } from './lib/voting.mjs';
 import { createWorkbench, loadDefaults } from './lib/workbench/project.mjs';
-import { workbenchRoutes } from './lib/workbench/http.mjs';
+import { workbenchRoutes, inboxItems } from './lib/workbench/http.mjs';
 import { createCommitGateway } from './lib/workbench/commit.mjs';
 import crypto from 'node:crypto';
 
@@ -49,9 +51,12 @@ const usage = createUsage({ workbench, pricing: WB_DEFAULTS.pricing });
 const clients = new Set();
 // 契约一的规则（补证任务、来源 gone 时的异议）：提交完成、补证任务结束时触发一次。flow 在下面建好后才接上
 let flow = null;
+let scheduler = null; // WP6：调度，下面建好后接上
 const wbEvent = (ev) => {
   broadcast({ ...ev, type: `wb-${ev.type}` }); // 工坊事件里从不带正文
   if (ev.type === 'commit' || (ev.type === 'task' && ['done', 'failed', 'cancelled'].includes(ev.state))) flow?.poke(ev.project);
+  // 调度（WP6）：任务离开“进行中”时看一眼这一轮能不能收、要不要开下一轮
+  if (ev.type === 'task' && !['claimed', 'proposed'].includes(ev.state)) scheduler?.poke(ev.project);
 };
 // 任务看板（契约三）：任务状态只由它改变；它同时是提交入口的栅栏
 const board = createTaskBoard({ workbench, usage, onEvent: wbEvent });
@@ -81,6 +86,8 @@ const sealed = createSealedStore();
 const participantById = Object.assign((id) => participants.find((p) => p.id === id) ?? null, { all: () => participants });
 const runner = createRunner({
   workbench, gateway, board, usage, sealed, participants: participantById, runAgent, deepseek,
+  onFailure: (x) => scheduler?.noteFailure(x), // 被限流、额度用完：参与者进入冷却
+  handoffOf: (p) => scheduler?.handoffOf(p) ?? null, // 当前阶段的交接单进任务包
   workRoot: path.join(DATA_DIR, 'work'), sandboxDir: SANDBOX,
   templateText: fs.readFileSync(path.join(ROOT, 'templates', 'project', 'project.md'), 'utf8'),
   timeoutMs: (config.timeoutSec || 300) * 1000, onEvent: wbEvent,
@@ -88,6 +95,14 @@ const runner = createRunner({
 // 工作方式（WP5b）：分工（拆成互不重叠的几份）与竞争（密封起草 → 匿名评审 → 选定 → 移植补丁 → 书记）
 const competitions = createCompetitions({ workbench, gateway, board, runner, participants: participantById, onEvent: wbEvent });
 const divisions = createDivisions({ workbench, gateway, board, runner, participants: participantById });
+// 调度（WP6）：按项目开关（默认关）；一轮 = 一批派发到全部结束；冷却按参与者、所有项目共用；七步阶段由主持人切换
+scheduler = createScheduler({
+  workbench, gateway, board, runner, participants: participantById, competitions, store,
+  cooldownFile: path.join(PROJECTS_DIR, '_cooldowns.json'),
+  inboxCount: (p) => inboxCountOf?.(p) ?? 0,
+  onEvent: wbEvent,
+});
+const inboxCountOf = (p) => inboxItems({ gateway, board, usage, competitions, scheduler }, p).length; // 待你决定的条数，交接单里用
 // 任务的重启恢复：服务自己发起的调用已不存在，这些尝试释放；已交稿但没来得及晋升的，补一次晋升
 for (const { name } of workbench.list()) {
   const released = board.recover(name);
@@ -102,6 +117,8 @@ for (const { name } of workbench.list()) {
 }
 flow = createEvidenceFlow({ workbench, gateway, board, availabilityOf: (p, urlOf) => usage.availabilityOf(p, { urlOf }) });
 for (const { name } of workbench.list()) flow.poke(name); // 启动时补做停机期间没来得及做的
+// 自动调度：定时检查开着自动调度的项目（任务事件也会触发）
+scheduler.start((WB_DEFAULTS.scheduler.intervalSeconds || 30) * 1000);
 // 租约到期的检查：读接口时会顺带清理，这里再定时扫一遍
 setInterval(() => {
   for (const { name } of workbench.list()) board.sweep(name);
@@ -334,6 +351,19 @@ function memoryFor(thread, p) {
   return { mode, mem: mode === 'off' ? null : store.getMemory(memKey(spaceOf(thread), p.id)) };
 }
 
+// 工坊项目里的研讨：讨论太长需要截断时，用“项目约定＋当前阶段的交接单”代替开题帖（WP6）
+const PROJECT_TEMPLATE = fs.readFileSync(path.join(ROOT, 'templates', 'project', 'project.md'), 'utf8');
+function withPreface(thread) {
+  if (!thread?.project) return thread;
+  try {
+    const conventions = cleanConventions(workbench.get(thread.project).conventions, PROJECT_TEMPLATE);
+    const h = scheduler?.handoffOf(thread.project);
+    return { ...thread, preface: `${conventions}${h ? `\n\n${h.text}` : ''}` };
+  } catch {
+    return thread; // 项目被删了：照旧保留开题帖
+  }
+}
+
 // 自由讨论中的一次发言（也可能是"本轮无新增意见"）
 async function runTurn(threadId, p, s) {
   const thread = store.getThread(threadId);
@@ -343,7 +373,7 @@ async function runTurn(threadId, p, s) {
   await withAgent(threadId, s, p, call, async (signal) => {
     const prompt = buildPrompt({
       me: { ...p, persona: call.config.persona },
-      thread,
+      thread: withPreface(thread),
       humanName: config.humanName,
       roster: roster(thread),
       maxChars: config.maxPromptChars || 60000,
@@ -480,7 +510,7 @@ async function castAiVote(pr, round, p, s) {
     const hide = pr.ballot === 'sealed' ? (post) => post.type === 'vote' && post.proposalId === pr.id && post.round === round.round : null;
     const prompt = buildVotePrompt({
       me: { ...p, persona: call.config.persona },
-      thread: store.getThread(threadId),
+      thread: withPreface(store.getThread(threadId)),
       proposal: store.getProposal(pr.id),
       round,
       voterNames: voterNamesOf(pr),
@@ -621,7 +651,7 @@ async function draftPhase(pr, s) {
     const lastRound = latest.rounds[latest.rounds.length - 1];
     const prompt = buildDraftPrompt({
       me: { ...p, persona: call.config.persona },
-      thread: store.getThread(pr.threadId),
+      thread: withPreface(store.getThread(pr.threadId)),
       proposal: latest,
       lastVotes: store.votesOf(pr.id, lastRound.round),
       maxChars: config.maxPromptChars || 60000,
@@ -869,7 +899,10 @@ const routes = [
     let project = null;
     if (body.project != null && body.project !== '') project = workbench.get(String(body.project)).name;
     const ref = typeof body.ref === 'string' && /^(?:[A-Z]{1,2}\d{3,6}|K\d{3,6})$/.test(body.ref) ? body.ref : null;
-    const memorySpace = project && (body.memorySpace == null || body.memorySpace === '') ? phaseSpace(store, project, '研讨').id : resolveSpace(body.memorySpace);
+    // 挂了项目的议题：记忆默认用这个项目当前阶段的空间（还没设阶段时用“研讨”空间）
+    const memorySpace = project && (body.memorySpace == null || body.memorySpace === '')
+      ? phaseSpace(store, project, scheduler.currentPhase(project)?.name ?? '研讨').id
+      : resolveSpace(body.memorySpace);
     const { thread, post } = store.createThread({ title, content, memoryMode, memorySpace, project, ref, ...authorOf(body) });
     broadcast({ type: 'thread', thread });
     if (post) broadcast({ type: 'post', post });
@@ -1211,7 +1244,7 @@ const routes = [
   }],
 
   ...workbenchRoutes({
-    workbench, gateway, web, usage, board, runner, sealed, flow, competitions, divisions, readJson, hostToken: HOST_TOKEN, humanName: config.humanName,
+    workbench, gateway, web, usage, board, runner, sealed, flow, competitions, divisions, scheduler, readJson, hostToken: HOST_TOKEN, humanName: config.humanName,
     participantByName: (name) => findParticipant(name),
     participants: () => participants,
   }),

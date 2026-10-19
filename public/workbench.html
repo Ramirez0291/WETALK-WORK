@@ -29,6 +29,7 @@
   <nav class="tabs" id="tabs">
     <button data-tab="overview" class="on">概况</button>
     <button data-tab="tasks">任务</button>
+    <button data-tab="schedule">调度</button>
     <button data-tab="divide">分工</button>
     <button data-tab="compete">竞争</button>
     <button data-tab="records">记录</button>
@@ -85,6 +86,28 @@
     </section>
 
     <section id="tab-inbox" hidden><div id="inboxList"></div></section>
+
+    <section id="tab-schedule" hidden>
+      <div class="panel">
+        <h4>阶段</h4>
+        <div id="phaseSteps" class="steps"></div>
+        <div class="tools"><select id="phaseTo"></select> <button id="phaseSwitch" class="primary">切换到这一阶段</button></div>
+        <p class="hint">切换时程序从正式记录生成一页以内的交接单（不调用模型）；旧阶段的工作记忆先归档再清空，新阶段换一个记忆空间。新阶段的任务包只带交接单，不带此前的讨论。这一轮还没收轮时不能切换。</p>
+        <div id="phaseHistory"></div>
+      </div>
+      <div class="panel">
+        <h4>自动调度</h4>
+        <div class="tools">
+          <label><input type="checkbox" id="autoOn"> 自动调度</label>
+          <button id="runOnce">跑一轮</button>
+        </div>
+        <p class="hint">默认关。打开后按分工表（routing）持续派发已就绪的任务，受调用次数和费用上限约束；“跑一轮”只把当前已就绪的任务派一次。冷却中、手上还有任务的参与者不派。揭晓、选定这些决定仍由你做。</p>
+        <div id="roundNow"></div>
+      </div>
+      <div id="roundList"></div>
+      <div id="cooldownList"></div>
+      <div id="handoffView" class="detail" hidden></div>
+    </section>
 
     <section id="tab-divide" hidden>
       <form id="newDivision" class="panel">

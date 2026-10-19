@@ -280,6 +280,7 @@ const VIEWS = {
       write_fault: '写入故障：已停止接受写入，请重启服务完成恢复', external_change: '服务进程之外改过的记录文件', bad_record_file: '读不出来的记录文件', archive_failed: 'git 留档失败',
       task_failed: '任务失败（尝试次数用完，不再自动重派）', task_needs_user: '任务待你决定', budget_exceeded: '项目用量已到上限',
       objection_needs_user: '异议待你裁决', claim_disputed: '论断的核验结论不一致', competition: '竞争需要你处理',
+      stagnation: '连续停滞，交给你决定', scheduler_budget: '自动调度到了用量上限',
     });
     const where = (i) => (i.competition ? `<a href="#" data-k="${esc(i.competition)}"><code>${esc(i.competition)}</code></a>`
       : i.objection || i.claim ? `<a href="#" data-goto="${esc(i.objection ?? i.claim)}"><code>${esc(i.objection ?? i.claim)}</code></a>` : `<code>${esc(i.path ?? i.cid ?? i.task ?? '')}</code>`);
@@ -300,6 +301,51 @@ const VIEWS = {
       document.querySelector('#tabs [data-tab="compete"]').click();
       setTimeout(() => showCompetition(a.dataset.k).catch(fail), 100);
     };
+  },
+
+  // ---------- 调度与阶段（WP6） ----------
+  async schedule() {
+    const s = await api('GET', P('/scheduler'));
+    const at = s.phase ? s.phases.findIndex((x) => x.id === s.phase.id) : -1;
+    $('#phaseSteps').innerHTML = s.phases.map((x, i) => `<span class="${i === at ? 'on' : i < at ? 'done' : ''}">${esc(ui(x.name))}</span>`).join('');
+    const sel = $('#phaseTo');
+    const keep = sel.value;
+    sel.innerHTML = s.phases.filter((x) => x.id !== s.phase?.id).map((x) => `<option value="${esc(x.id)}">${esc(ui(x.name))}</option>`).join('');
+    if ([...sel.options].some((o) => o.value === keep)) sel.value = keep;
+    else if (at + 1 < s.phases.length && at >= -1) sel.value = s.phases[at + 1].id;
+    const pname = (id) => ui(s.phases.find((x) => x.id === id)?.name ?? '（开始）');
+    $('#phaseHistory').innerHTML = s.phase_history.length
+      ? `<ul>${s.phase_history.slice().reverse().map((h) => ui`<li>${time(h.at)} · ${esc(h.from ? pname(h.from) : ui('（开始）'))} → ${esc(pname(h.to))} · 交接单 <a href="#" data-h="${esc(h.id)}"><code>${esc(h.id)}</code></a>${h.memory ? ui` · 归档了 ${h.memory.archived} 份工作笔记` : ''}</li>`).join('')}</ul>`
+      : ui('<p class="hint">还没有设阶段。切换到第一个阶段时生成第一份交接单。</p>');
+    $('#autoOn').checked = s.auto;
+    const r = s.round;
+    $('#roundNow').innerHTML = r
+      ? ui`<p>${badge(ui`第 ${r.n} 轮进行中`, 'b-warn')} ${esc(r.phase_name ? ui(r.phase_name) : '')}：${r.live.map((x) => `<code>${esc(x.task)}</code> ${badge(...(TASK_STATE[x.state] ?? [x.state, 'b-muted']))}`).join(' ')}</p>`
+      : s.last
+        ? ui`<p class="hint">上次派发：${time(s.last.at)}，派出 ${s.last.dispatched.length} 个任务${s.last.skipped.length ? ui`，${s.last.skipped.length} 个没派出去` : ''}。</p>${s.last.skipped.length ? `<details><summary>${esc(ui('没派出去的原因'))}</summary><ul>${s.last.skipped.map((x) => `<li><code>${esc(x.task)}</code> <span class="hint">${esc(x.reason)}</span></li>`).join('')}</ul></details>` : ''}`
+        : ui('<p class="hint">还没有派发过。</p>');
+    if (s.last_error) $('#roundNow').innerHTML += ui`<p>${badge(ui('调度出错'), 'b-bad')} <span class="hint">${time(s.last_error.at)}：${esc(s.last_error.message)}</span></p>`;
+    const q = (a) => {
+      const x = a.quality;
+      const c = x.confusions ? ui`，不懂处 ${x.confusions.before} → ${x.confusions.after}` : '';
+      return ui`新增 supported 论断 ${x.supported_new}，解除阻塞 ${x.blockers_resolved}${c}`;
+    };
+    const ACTION = localized({ audience_reader: '派了观众型新读者', needs_user: '交给你决定' });
+    const PLAN = localized({ audience_reader: '派观众型新读者', needs_user: '交给你决定' });
+    $('#roundList').innerHTML = ui`<h4>轮次</h4><p class="hint">一轮 = 一批派发到全部结束。连续 ${s.plateau.rounds} 轮停滞时：${esc(PLAN[s.plateau.action] ?? s.plateau.action)}。现在连续停滞 ${s.streak} 轮。</p>`
+      + (s.rounds.length
+        ? ui`<div class="wrap"><table><tr><th>轮</th><th>阶段</th><th>时间</th><th>任务</th><th>结论</th><th>改动记录</th><th>质量指标</th><th>处理</th></tr>
+          ${s.rounds.map((x) => `<tr><td>${x.n}</td><td>${esc(x.phase_name ? ui(x.phase_name) : '—')}</td><td class="hint">${time(x.started_at)}<br>${time(x.ended_at)}</td>
+            <td>${x.tasks.map((t) => `<code>${esc(t)}</code>`).join(' ')}</td>
+            <td>${badge(...(ROUND_KIND[x.assessment.kind] ?? [x.assessment.kind, 'b-muted']))}</td>
+            <td class="hint">${x.assessment.changelog.not_filled ? ui`没填：${x.assessment.changelog.missing.join(ui('、'))}` : x.assessment.changelog.writers.length ? ui('已填') : '—'}</td>
+            <td class="hint">${q(x.assessment)}</td>
+            <td class="hint">${x.action ? `${esc(ACTION[x.action.type] ?? x.action.type)}${x.action.task ? ` <code>${esc(x.action.task)}</code>` : ''}` : ''}</td></tr>`).join('')}</table></div>`
+        : ui('<p class="hint">还没有收过轮。</p>'));
+    $('#cooldownList').innerHTML = s.cooldowns.length
+      ? ui`<h4>冷却中的参与者</h4><ul>${s.cooldowns.map((c) => ui`<li><code>${esc(c.participant)}</code> 到 ${time(c.until)}（${esc(c.reason)}）</li>`).join('')}</ul>`
+      : '';
+    for (const a of document.querySelectorAll('#phaseHistory [data-h]')) a.onclick = (e) => (e.preventDefault(), showHandoff(a.dataset.h).catch(fail));
   },
 
   // ---------- 分工 ----------
@@ -875,6 +921,54 @@ $('#languageSelect').onchange = async (e) => {
     if (openRecord && !$('#recordDetail').hidden) await showRecord(openRecord, { scroll: false, keep: true });
     if (openCompetition && !$('#competitionDetail').hidden) await showCompetition(openCompetition, { scroll: false, keep: true });
     if (openPacket && !$('#taskDetail').hidden) await showPacket(openPacket, { scroll: false });
+  } catch (err) {
+    fail(err);
+  }
+};
+
+// ---------- 调度与阶段（WP6） ----------
+
+const ROUND_KIND = localizedBadges({
+  progress: ['有进展', 'b-ok'], unchanged: ['停滞：内容没有变化', 'b-bad'], no_improvement: ['停滞：有变化但质量指标没有提升', 'b-bad'],
+  no_result: ['没有任务完成', 'b-muted'], reading: ['只有读者或评审', 'b-muted'],
+});
+
+async function showHandoff(id) {
+  const h = await api('GET', P(`/handoffs/${id}`));
+  const box = $('#handoffView');
+  box.hidden = false;
+  box.innerHTML = ui`<h3>交接单 <code>${esc(h.id)}</code></h3><pre>${esc(h.text)}</pre>`;
+  box.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+}
+
+$('#autoOn').onchange = async (e) => {
+  try {
+    const s = await api('POST', P('/scheduler/auto'), { on: e.target.checked });
+    toast(s.auto ? ui('自动调度已打开') : ui('自动调度已关闭'));
+  } catch (err) {
+    fail(err);
+  }
+  VIEWS.schedule().catch(fail);
+};
+
+$('#runOnce').onclick = async () => {
+  try {
+    const r = await api('POST', P('/scheduler/run'), {});
+    toast(r.round ? ui`第 ${r.round.n} 轮：派出 ${r.round.tasks.length} 个任务` : ui`没有派出任务${r.last?.skipped?.length ? ui`（${r.last.skipped.length} 个已就绪的任务没派出去，原因见下）` : ui('（没有已就绪的任务）')}`);
+  } catch (err) {
+    fail(err);
+  }
+  VIEWS.schedule().catch(fail);
+};
+
+$('#phaseSwitch').onclick = async () => {
+  const to = $('#phaseTo').value;
+  if (!to || !confirm(ui`切换到“${$('#phaseTo').selectedOptions[0].textContent}”阶段？旧阶段的工作记忆会先归档再清空。`)) return;
+  try {
+    const r = await api('POST', P('/phase'), { to });
+    toast(ui`已切换阶段，交接单 ${r.handoff.id}`);
+    await VIEWS.schedule();
+    await showHandoff(r.handoff.id);
   } catch (err) {
     fail(err);
   }

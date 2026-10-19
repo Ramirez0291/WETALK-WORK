@@ -80,6 +80,10 @@
       "shared"
     ]
   },
+  "scheduler": {
+    "maxPerParticipant": 1,
+    "intervalSeconds": 30
+  },
   "plateau": {
     "rounds": 1,
     "action": "audience_reader"
