@@ -2,7 +2,7 @@
 
 Oct 18, 2026 · @LI(RAMI)LINGYUE
 
-> 本地修订（2026-10-18，WP1 评审后经主持人同意）：模块清单补 `git.mjs`、`fsx.mjs`，`templates/` 分为项目骨架与 PPT 模板；数据模型补 `provenance`（内容生产者身份）；契约二补 git 留档的字面路径与换行约定；PowerPoint 待定事项更新；修正路径笔误。WP2 评审后经主持人同意，再补：作品编号前缀、候选稿目录名、核验与异议的写入推迟到 WP5、inbox 提前到 WP2、projects 仓库的忽略规则、按 blob 字节留档，以及契约二的写入故障、编号不复用、正式状态取已提交快照、失效锁的接管规则。WP3 后经主持人同意，再补：来源可获取性移出来源卡改为派生、quote 指针检查提前到晋升时及引文定位规则、来源正文只来自 Fetch 或主持人录入、`deepseek` 与 `pricing` 配置、用量账本与新接口、费用软上限。WP3 评审修复后经主持人同意，再补：用量账本先占后结、Fetch 绑定来源地址与迁址、正文快照登记、按物理请求限速与项目重试策略、Codex 审计实测结论。WP3 第二轮评审修复后经主持人同意，再补：可获取性只认来源卡当前地址的抓取、主持人确认带地址、账本兼容第一版单行格式。WP4 后经主持人同意，再补：读资料任务改为输入内联、不给工具（实测结论）、Codex 全面关闭工具与事件审计、密封任务的状态路径、新增任务接口、命令行调用计入上限、忽略规则、工坊为主页面。WP4 评审修复后经主持人同意，再补：已交稿任务被取消时候选稿不再晋升、密封占位记录与失败信息不含输出、观众型读者不接受 blob 输入、阶段重置先归档后清空、密封轮次按项目隔离。WP4 第二轮评审修复后经主持人同意，再补：密封占位规则覆盖用量账本与 API 每次请求的报错、揭晓先校验后写盘且可从断点重做。WP5a 后经主持人同意，再补：核验者与提出者由提交入口填写、核验份数按核验者去重、可进入成品要求份数够、异议状态机（新增 resolved）与指针规则、补证与 gone 规则、新接口与任务类型。WP5a 评审修复后经主持人同意，再补：作者集合 authors、裁定者厂商须可推断、尝试身份以实际报告的厂商为准、补证固定针对异议所指版本、gone 撤销的规则例外、resolve 接口的同号重试。WP5a 第二轮评审修复后经主持人同意，再补：作者集合按参与者＋厂商累积、任务输入剔除内容生产者身份。WP5b 后经主持人同意，再补：模块与目录（compete、divide、competitions/）、竞争选定与书记的内容来源、任务的内部字段与同组密封轮次、分工互不重叠的检查、竞争细则（标签、具体位置、选定、移植补丁、书记、少数意见记录）、新接口、研讨议题挂到项目。WP5b 评审修复后经主持人同意，再补：竞争的可引用论断与编号绑定、选定与书记先记下再提交后补记、内部流程的候选稿只能由该流程晋升、分工范围检查覆盖全部指针、分工条目作为任务输入、`compete.drafts` 取 2 到 6。WP6 后经主持人同意，再补：调度模块与运行时文件、自动调度开关与“跑一轮”、轮的定义与挑参与者的规则、冷却与上限、停滞检测的算法与处理、改动记录、七步阶段与交接单、讨论截断、新配置与新接口。WP6 修复后经主持人同意，再补：阶段切换中途失败的恢复、自动调度保存没派出去的原因、到了上限后不再试派、截断的总预算与配额、`/scheduler` 与“待你决定”里没做完的阶段切换。线上版本尚未同步这些修订。
+> 本地修订（2026-10-18，WP1 评审后经主持人同意）：模块清单补 `git.mjs`、`fsx.mjs`，`templates/` 分为项目骨架与 PPT 模板；数据模型补 `provenance`（内容生产者身份）；契约二补 git 留档的字面路径与换行约定；PowerPoint 待定事项更新；修正路径笔误。WP2 评审后经主持人同意，再补：作品编号前缀、候选稿目录名、核验与异议的写入推迟到 WP5、inbox 提前到 WP2、projects 仓库的忽略规则、按 blob 字节留档，以及契约二的写入故障、编号不复用、正式状态取已提交快照、失效锁的接管规则。WP3 后经主持人同意，再补：来源可获取性移出来源卡改为派生、quote 指针检查提前到晋升时及引文定位规则、来源正文只来自 Fetch 或主持人录入、`deepseek` 与 `pricing` 配置、用量账本与新接口、费用软上限。WP3 评审修复后经主持人同意，再补：用量账本先占后结、Fetch 绑定来源地址与迁址、正文快照登记、按物理请求限速与项目重试策略、Codex 审计实测结论。WP3 第二轮评审修复后经主持人同意，再补：可获取性只认来源卡当前地址的抓取、主持人确认带地址、账本兼容第一版单行格式。WP4 后经主持人同意，再补：读资料任务改为输入内联、不给工具（实测结论）、Codex 全面关闭工具与事件审计、密封任务的状态路径、新增任务接口、命令行调用计入上限、忽略规则、工坊为主页面。WP4 评审修复后经主持人同意，再补：已交稿任务被取消时候选稿不再晋升、密封占位记录与失败信息不含输出、观众型读者不接受 blob 输入、阶段重置先归档后清空、密封轮次按项目隔离。WP4 第二轮评审修复后经主持人同意，再补：密封占位规则覆盖用量账本与 API 每次请求的报错、揭晓先校验后写盘且可从断点重做。WP5a 后经主持人同意，再补：核验者与提出者由提交入口填写、核验份数按核验者去重、可进入成品要求份数够、异议状态机（新增 resolved）与指针规则、补证与 gone 规则、新接口与任务类型。WP5a 评审修复后经主持人同意，再补：作者集合 authors、裁定者厂商须可推断、尝试身份以实际报告的厂商为准、补证固定针对异议所指版本、gone 撤销的规则例外、resolve 接口的同号重试。WP5a 第二轮评审修复后经主持人同意，再补：作者集合按参与者＋厂商累积、任务输入剔除内容生产者身份。WP5b 后经主持人同意，再补：模块与目录（compete、divide、competitions/）、竞争选定与书记的内容来源、任务的内部字段与同组密封轮次、分工互不重叠的检查、竞争细则（标签、具体位置、选定、移植补丁、书记、少数意见记录）、新接口、研讨议题挂到项目。WP5b 评审修复后经主持人同意，再补：竞争的可引用论断与编号绑定、选定与书记先记下再提交后补记、内部流程的候选稿只能由该流程晋升、分工范围检查覆盖全部指针、分工条目作为任务输入、`compete.drafts` 取 2 到 6。WP6 后经主持人同意，再补：调度模块与运行时文件、自动调度开关与“跑一轮”、轮的定义与挑参与者的规则、冷却与上限、停滞检测的算法与处理、改动记录、七步阶段与交接单、讨论截断、新配置与新接口。WP6 修复后经主持人同意，再补：阶段切换中途失败的恢复、自动调度保存没派出去的原因、到了上限后不再试派、截断的总预算与配额、`/scheduler` 与“待你决定”里没做完的阶段切换。WP7a 后经主持人同意，再补：导出模块与文件名（`pptx_export.py`、`render.ps1`）、导出记录 EX###、契约四“导出”一行与实测结论、WP7 拆成 7a/7b 与细则（幻灯片源的正文约定、读回核对、PowerPoint 渲染检查、可交付）、模板与 skill 只认文件名、`render.engine` 的取值、导出接口，关闭“PowerPoint 还是 LibreOffice”的待定事项。线上版本尚未同步这些修订。
 
 本文档把 claudework 多 Agent 工坊设计 V2 拆成可开发的工作包，在从 WETALK 派生的新仓库（暂名 `WETALK-WORK`）里实现。WETALK 本身保持轻便，不合入工坊功能。v0.2 根据评审补了四份核心契约（证据与核验、提交与恢复、任务与租约、上下文与可见性），状态改为由记录派生，并重排了工作包。
 
@@ -75,18 +75,24 @@ WETALK-WORK/
 │  ├─ scheduler.mjs    规则调度循环：派发、轮、冷却、上限、争议分流、阶段切换
 │  ├─ changelog.mjs    改动记录、内容与质量指标的快照、轮的结论（停滞检测）
 │  ├─ phases.mjs       七步阶段、交接单、阶段记忆空间的归档与切换
+│  ├─ exports.mjs      导出服务：发起、生成、写导出记录、渲染检查、文件下载
 │  ├─ web.mjs          DeepSeek Search / Fetch 封装
 │  ├─ git.mjs          git 留档：只按字面路径提交本次清单里的文件
 │  ├─ fsx.mjs          Windows 兼容的文件操作：改名遇到占用时退避重试
 │  └─ export/
-│     ├─ markdown.mjs   幻灯片源 → Markdown
-│     ├─ pptx.py        幻灯片源 ＋ 模板 → PPTX（python-pptx），并读回核对
-│     ├─ render.py      PPTX → PDF / 图片，字体检查
-│     └─ agent.mjs      指定 Agent 负责导出时的任务封装
+│     ├─ deck.mjs           幻灯片源的正文约定、结构检查、交给 PPTX 的幻灯片源、读回核对
+│     ├─ markdown.mjs       幻灯片源 → Markdown（论断编号写成脚注）
+│     ├─ pptx_export.py     幻灯片源 ＋ 模板 → PPTX（python-pptx），读回，列出模板版式（不叫 pptx.py：与 python-pptx 包同名会遮住包本身）
+│     ├─ render.ps1         PowerShell 经 COM 自动化 PowerPoint：PPTX → PDF / 逐页图片，排版范围与字体，本机字体
+│     ├─ render.mjs         渲染检查的分析：溢出、超出页面、重叠、字体缺失、图片变形、图表提示
+│     ├─ plan.mjs           指定 Agent 负责导出：版式方案的输出要求与解析（Agent 不给工具）
+│     ├─ proc.mjs           起外部程序（输入输出走 UTF-8 文件，有超时）
+│     └─ make_template.py   生成默认模板 templates/pptx/default.pptx
 ├─ lib/agents.mjs       ＋ deepseek 适配器、无工具与只读目录两种调用、Codex 命令审计
 ├─ templates/
 │  ├─ project/         项目骨架：project.md、protocol.json、baseline.md
-│  └─ pptx/            PPT 模板文件
+│  ├─ pptx/            PPT 模板文件（默认 default.pptx）
+│  └─ skills/          导出用的 skill（Markdown）
 ├─ workbench.defaults.json   可调参数默认值
 └─ tests/workbench/*.test.mjs
 ```
@@ -112,7 +118,7 @@ WETALK-WORK\projects          整个目录是一个 git 仓库
    ├─ changelog.jsonl                改动记录，只追加（不进 git）
    ├─ decisions\D001.md              参数与内容的决策记录
    ├─ handoff\H001.md                阶段交接单（程序生成，不进 git）
-   ├─ exports\                       导出的 Markdown、PPTX 与渲染检查结果
+   ├─ exports\EX001.json             导出记录（正式记录）；exports\EX001\ 下是文件副本与渲染产物（不进 git）
    ├─ events.jsonl                   审计事件，只追加
    └─ archive\                       旧版本、blobs、任务包快照
 
@@ -138,6 +144,7 @@ WETALK-WORK\projects          整个目录是一个 git 仓库
 | 作品 | `outline/OL###` `script/SC###` `slides/SL###` | 页或节的 id、claims | 提交入口 |
 | 内容来源 | 每条正式记录的每个版本都带 `provenance` | 主体类型（agent / human）、参与者、实际模型与厂商、task 与 attempt、判定依据、是否已证实 | 提交入口（从服务端保存的任务尝试和调用记录派生，不采信请求里自报的身份） |
 | 候选稿 | `candidates/<sid>/`，sid = `<任务>-<尝试>-<时间>-<随机>`，主持人提交为 `H-<时间>-<随机>` | 结果内容、提交时的依赖版本、request\_id | 提交入口 |
+| 导出 | `exports/EX###.json` | 用了哪些幻灯片（{id, version}）、模板与 skill（文件名＋内容 blob）、版式方案与出方案的任务、生成的文件（blob）、结构检查、读回核对与渲染检查的结果 | 导出流程（规则 workbench-export），经提交入口；幻灯片改版后导出为 stale；文件 blob 随记录进 git 留档 |
 | 任务 | `tasks/T###.json` | 见“契约三” | 调度程序 |
 | 提交日志 | `_txn/` 与 `commits.jsonl` | 见“契约二” | 提交入口 |
 | 事件 | `events.jsonl` | 仅用于审计，只追加 | 服务进程 |
@@ -345,9 +352,9 @@ WETALK-WORK\projects          整个目录是一个 git 仓库
 | --- | --- | --- |
 | 密封起草、匿名评审、观众型读者 | 固定任务包从标准输入传入，结果由服务端收集 | 无工具 |
 | 读资料的任务（抽取、核验） | 任务包全部内联进提示词（Claude、Codex、DeepSeek），论断输入会附上它所引的每个来源（按引用版本）及正文快照；只有通用适配器（自带脚本）使用专用临时工作目录，只放允许的输入副本 | 无工具（实测：工作目录不构成隔离，见下） |
-| 导出 | 幻灯片源＋模板＋skill 内容 | 只写自己的工作目录（WP7 实测） |
+| 导出（Agent 出版式方案） | 幻灯片源＋模板的版式清单＋skill 内容，内联 | 无工具；PPTX 由脚本生成，脚本只写导出目录 |
 
-**实测结论（2026-10-18，Windows）：** 只开 Read / Glob / Grep、工作目录设为临时目录的 Claude 照样读到并列出了工作目录以外的文件，权限层没有拦截；Codex 只要开着 shell 就能读任何地方。所以工坊任务里的 Claude、Codex 一律不给工具，输入内联；不给工具的 Claude 在同样的授权测试里一个工具都执行不了。读资料任务若仍有命令执行记录（通用适配器等），按命令里的绝对路径、`..` 和 MCP 工具做越界检查，越界不予收稿；没查出越界只记为“隔离未证实”。
+**实测结论（2026-10-18，Windows）：** 只开 Read / Glob / Grep、工作目录设为临时目录的 Claude 照样读到并列出了工作目录以外的文件，权限层没有拦截；Codex 只要开着 shell 就能读任何地方。所以工坊任务里的 Claude、Codex 一律不给工具，输入内联；不给工具的 Claude 在同样的授权测试里一个工具都执行不了。读资料任务若仍有命令执行记录（通用适配器等），按命令里的绝对路径、`..` 和 MCP 工具做越界检查，越界不予收稿；没查出越界只记为“隔离未证实”。同样的原因，导出也不给工具：Agent 只回版式方案（每页用模板里的哪个版式），PPTX 由脚本生成。
 
 **各家的做法：**
 
@@ -483,11 +490,14 @@ WETALK-WORK\projects          整个目录是一个 git 仓库
 
 ### WP7 导出与成品验收
 
-- 幻灯片源：`slides/` 下每页一个记录，含标题、正文、讲者备注、引用的论断编号。
-- 两种导出：Markdown（`export/markdown.mjs`）；PPTX（`export/pptx.py`，用 python-pptx 套用 .pptx 模板的版式）。Python 使用工坊仓库自己的 `.venv`，由 `export.python` 指定。
-- 导出方式可配置：脚本导出，或派给指定 Agent（产物同样走提交入口和成品检查）；版式用模板文件或 skill 控制，它们的内容版本写进任务包。
-- **结构检查（程序）：** 正文每个句子要么带论断编号，要么标为非事实；引用的论断全部“可进入成品”；字数不超上限；备注不为空；读回 PPTX 核对页数、备注和编号。
-- **渲染检查：** PPTX → PDF 或图片 → 逐页检查文字溢出与重叠、字体缺失、图表标签裁切、图片变形 → 修复后重新验收。渲染优先用本机 PowerPoint（若已安装，由脚本自动化），否则用 LibreOffice 无界面模式。脚本列出 PPTX 用到的字体并对照本机字体。逐页视觉检查由多模态模型初查、你终审，结果作为核验记录保存。
+WP7 拆成两段：WP7a 导出与程序检查（两种导出、结构检查、读回核对、渲染与程序检查、故意做坏的样例、Agent 版式方案、导出接口与页面）；WP7b 视觉检查与验收（逐页视觉检查、试运行报告、整套流程的集成测试）。
+
+- 幻灯片源：`slides/` 下每页一个记录，含标题、正文、讲者备注、引用的论断编号。正文的约定：每个句子要么带论断编号（`C001`，可以单写，也可以写在〔〕［］[]（）() 里，几个编号用顿号或逗号隔开），要么标为非事实（`〔非事实〕`，写在句首或句尾）；句末标点后面紧跟的编号算前一句的；编号必须在这一页的 claims 里，按那里的版本绑定；`- ` 开头的行是要点，缩进两格是下一级。导出时编号和标记从页面上去掉：PPTX 里挪进讲者备注（“依据”与一行 `〔SL001@1 · 依据 C001@1〕` 标记），Markdown 里写成脚注。
+- 两种导出：Markdown（`export/markdown.mjs`）；PPTX（`export/pptx_export.py`，用 python-pptx 套用 .pptx 模板的版式）。Python 使用工坊仓库自己的 `.venv`，由 `export.python` 指定。每次导出写成一条导出记录 EX###（见数据模型）。
+- 导出方式可配置：脚本导出，或派给指定 Agent（产物同样走提交入口和成品检查）；版式用模板文件或 skill 控制，它们的内容版本写进任务包。派给 Agent 时，它不给工具，只按幻灯片、模板的版式清单和 skill 回版式方案（每页正好一次、版式在清单里、有正文的页要有正文占位符），不合规时这次尝试失败；脚本照方案生成，生成时用任务里记下的那份模板。
+- **结构检查（程序）：** 正文每个句子要么带论断编号，要么标为非事实；编号在这一页的 claims 里；引用的论断全部“可进入成品”且是当前版本；字数不超上限（不算编号、标记、空白）；备注不为空。**读回核对：** 读回 PPTX 核对页数、每页的标题与正文、备注，以及备注里的标记（页序、版本、论断编号）。
+- **渲染检查：** PPTX → PDF 或图片 → 逐页检查文字溢出与重叠、字体缺失、图表标签裁切、图片变形 → 修复后重新验收。渲染用本机 PowerPoint，由脚本经 COM 自动化（只读打开、不显示窗口）。溢出、超出页面、重叠按 PowerPoint 读出的实际排版范围判断（外框重叠、字没叠在一起的不算）；脚本列出 PPTX 用到的字体（PowerPoint 报告的、读回的、主题里的），对照本机字体的各语言名称；图片按显示宽高比与原图（扣除裁剪）判断变形；图表标签程序查不出，只提示看图确认。没有 PowerPoint 时只查字体、图片和图表，溢出与重叠记为未检查，不给“通过”。LibreOffice 这一版不接（本机没有，无法实测）。渲染检查的结果写成导出记录的新版本。逐页视觉检查由多模态模型初查、你终审，结果作为核验记录保存（WP7b）。
+- **可交付：** 结构检查、读回核对、渲染检查都通过，且用到的幻灯片仍是当前版本；WP7b 再加上逐页视觉检查。
 - 试运行报告：四项指标与 WP1 基线逐项对比。
 
 * [ ] Markdown 与 PPTX 两种导出都可用；换模板或 skill 不改代码
@@ -530,10 +540,14 @@ WETALK-WORK\projects          整个目录是一个 git 仓库
 | GET | `/scheduler` | 调度状态：自动调度开关、当前阶段与切换历史、没做完的阶段切换、当前轮与最近几轮的结论、上次派发与没派出去的原因、冷却中的参与者 | WP6 |
 | POST | `/scheduler/auto`、`/scheduler/run` | 开关自动调度（`{ on }`）；跑一轮（只限主持人） | WP6 |
 | POST / GET | `/phase`、`/handoffs/:h` | 切换阶段（`{ to }`，只限主持人；生成交接单、切换记忆空间）；读交接单 | WP6 |
-| POST | `/export` | 导出：format、via（script 或某个 Agent）、template、skill | WP7 |
-| GET | `/report` | 结构检查、渲染检查与试运行报告 | WP7 |
+| POST | `/export` | 导出（只限主持人）：formats（md、pptx）、via（script 或某位参与者的 id，后者要含 pptx）、template、skill（文件名）；不写的按项目配置 | WP7a |
+| GET | `/exports`、`/exports/:id` | 导出列表（含 Agent 的版式方案任务、可选的模板与 skill）；导出详情（记录、检查结果、可下载的文件） | WP7a |
+| POST | `/exports/:id/render` | 渲染检查（只限主持人）：结果写成导出记录的新版本；导出已 stale 时拒绝 | WP7a |
+| GET | `/exports/:id/files/<名字>` | 取文件：deck.md、deck.pptx、render-<时间>/deck.pdf、render-<时间>/pNN.png | WP7a |
+| POST | `/exports/tasks/:t/build` | 按 Agent 交的版式方案再生成一次（只限主持人） | WP7a |
+| GET | `/report` | 结构检查、渲染检查与试运行报告 | WP7b |
 
-SSE 新增事件：`record`、`task`、`verification`、`objection`、`commit`、`archive`、`inbox`、`competition`、`scheduler`、`cooldown`。密封中的内容不进入任何事件。
+SSE 新增事件：`record`、`task`、`verification`、`objection`、`commit`、`archive`、`inbox`、`competition`、`scheduler`、`cooldown`、`export`。密封中的内容不进入任何事件。
 
 **MCP 工具**（都带 project 参数，都不返回密封中的内容）：`wetalk_task_list`、`wetalk_task_claim`（返回任务包）、`wetalk_task_renew`、`wetalk_submit`、`wetalk_record_read`、`wetalk_trace`、`wetalk_verification_create`、`wetalk_objection_create`。
 
@@ -584,10 +598,10 @@ SSE 新增事件：`record`、`task`、`verification`、`objection`、`commit`�
 | `git.autoCommit` | 数据提交后自动 git 留档 | true |
 | `export.formats` | 导出格式 | md、pptx |
 | `export.via` | 导出方式 | script（也可填某个 Agent 的 id） |
-| `export.template` | PPTX 模板文件 | 未设定时用脚本自带的默认版式 |
-| `export.skill` | 导出任务引用的 skill | 未设定 |
+| `export.template` | PPTX 模板：`templates/pptx/` 里的文件名（只认文件名） | 未设定时用 `default.pptx`（16:9，微软雅黑 ＋ Segoe UI） |
+| `export.skill` | 导出任务引用的 skill：`templates/skills/` 里的 Markdown 文件名（只认文件名） | 未设定 |
 | `export.python` | 导出脚本使用的 Python 解释器 | 工坊仓库内的 `.venv\Scripts\python.exe` |
-| `render.engine` | 渲染检查用的程序 | auto：有 PowerPoint 用 PowerPoint，否则 LibreOffice |
+| `render.engine` | 渲染检查用的程序：auto（有 PowerPoint 用 PowerPoint，否则只查字体、图片、图表）或 powerpoint；libreoffice 这一版报错 | auto |
 
 每次修改参数，在项目的 `decisions/` 里记一条：改了什么、为什么、依据哪次试运行的数据。
 
@@ -628,7 +642,7 @@ SSE 新增事件：`record`、`task`、`verification`、`objection`、`commit`�
 **待定：**
 
 - [x] 试运行 PPT 的目标观众，写进 project.md（WP1）：已由主持人填写
-- [ ] 渲染检查用 PowerPoint 还是 LibreOffice（WP7）：已确认本机装有 PowerPoint、没有 LibreOffice；脚本能否可靠地自动化 PowerPoint 导出与渲染，在 WP7 实测后关闭
+- [x] 渲染检查用 PowerPoint 还是 LibreOffice（WP7）：用 PowerPoint。WP7a 实测 COM 自动化可靠（中文、日文路径都没问题，2–3 页 15–40 秒），故意做坏的样例里溢出、超出页面、缺字体、图片变形都查得出；LibreOffice 本机没有，这一版不接
 - [x] Codex 的 JSON 事件输出能否可靠地审计执行过的命令：能，按 item 类型白名单审计，密封类调用关掉 shell 与用户配置（见契约四与 `astra-log/WP4-preflight-codex-2026-10-18.md`）
 
 ## 参考
