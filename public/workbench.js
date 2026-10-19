@@ -104,6 +104,7 @@ const verif = (s) => {
   return badge(v.state === 'supported' ? `${text} ${v.independent}/${v.required}` : text, v.state === 'supported' && !v.enough ? 'b-warn' : cls);
 };
 const UNCOUNTED = {
+  is_author: '核验者是这条论断（某个版本）的作者', vendor_conflict: '实际报告的模型与配置的厂商不一致，待确认',
   same_vendor: '与作者同厂商', identity_unverified: '身份未证实（MCP 外部会话）', vendor_unknown: '推断不出核验者的厂商',
   author_vendor_unknown: '推断不出作者的厂商', superseded: '同一核验者后来又核验了一次，只算最新一份',
 };
