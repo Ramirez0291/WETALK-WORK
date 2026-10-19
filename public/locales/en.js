@@ -864,4 +864,11 @@ export default {
   "已切换阶段，交接单 {0}": "Phase switched, handoff {0}",
   "连续停滞，交给你决定": "Stalled for several rounds, left to you",
   "自动调度到了用量上限": "Auto scheduling hit the usage limit",
+  "阶段切换没完成": "Phase switch not finished",
+  "{0} 切换到“{1}”还没完成{2}。阶段仍是原来的，调度暂停派发；再切换一次把它做完。": "{0} The switch to \"{1}\" did not finish{2}. The phase is unchanged and dispatching is paused; switch again to finish it.",
+  "继续切换到“{0}”": "Finish switching to \"{0}\"",
+  "旧阶段的工作笔记归档在": "Working notes of the old phase are archived in",
+  "，重做时合并进同一份归档，不会再归档一份空的。": "; finishing the switch merges into the same archive instead of archiving an empty one.",
+  "· 中途失败过，重做后完成": "· failed midway, finished on retry",
+  "阶段切换没完成，调度暂停派发。": "A phase switch did not finish; dispatching is paused.",
 };

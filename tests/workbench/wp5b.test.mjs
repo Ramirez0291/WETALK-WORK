@@ -14,6 +14,7 @@ import { sectionsOf, parseReview, applyPatches, checkPatch, patchConflict, numbe
 import { authorsOf } from '../../lib/workbench/verify.mjs';
 import { workbenchRoutes } from '../../lib/workbench/http.mjs';
 import { restorePacket } from '../../lib/workbench/packets.mjs';
+import { buildHandoff, PHASES } from '../../lib/workbench/phases.mjs';
 import { setup, restart, rid, DEFAULTS, HUMAN, cleanup, tmpBase } from './helpers.mjs';
 
 after(cleanup);
@@ -779,4 +780,23 @@ test('复审 R2：书记的结果确认不了时补丁冻结（提出、接受�
   assert.ok(ol.body.includes('## 结语'));
   v = await c2.close(P, 'K001', HUMAN);
   assert.deepEqual([v.stage, v.minority.skipped_patches], ['closed', []]);
+});
+
+// ---------- WP6 评审的其他反馈：交接单里的竞争 ----------
+
+test('交接单里的竞争：用竞争列表的摘要（带阶段说明），选定后写出少数意见的条数（被拒的补丁＋没被采纳的评审意见）', async () => {
+  const e = await env();
+  const w = world(e, { claude: ['# 甲 MARK-A\n\n## 问题\n起点。\n'], codex: ['# 乙 MARK-B\n\n## 开场\n先问一个问题。\n'], 'deepseek-pro': ONE_REVIEW });
+  const c = w.competitions;
+  const { A, B } = await toSelecting(w);
+  const handoff = () => buildHandoff({ title: '项目', from: PHASES[3], to: PHASES[4], at: '2026-10-19T00:00:00Z', records: e.gw.listRecords(P), competitions: c.list(P) });
+  assert.deepEqual([c.list(P)[0].stage_label, c.list(P)[0].minority], ['待你选定', 0]);
+  assert.match(handoff(), /- K001《题目》：待你选定\n/);
+  await c.select(P, 'K001', { label: A, reason: '好' }, HUMAN);
+  await c.propose(P, 'K001', { from: { draft: B, section: 1 }, to: { section: 1, position: 'after' } }, HUMAN);
+  await c.decide(P, 'K001', 'P1', { decision: 'reject', reason: '开场不需要两次' }, HUMAN);
+  assert.equal(c.list(P)[0].minority, 2);
+  const text = handoff();
+  assert.match(text, new RegExp(`- K001《题目》：移植补丁，选定 ${A} → OL001；少数意见 2 条留在竞争记录里`));
+  assert.doesNotMatch(text, /undefined/);
 });

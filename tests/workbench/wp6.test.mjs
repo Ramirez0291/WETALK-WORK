@@ -19,7 +19,12 @@ import { restorePacket } from '../../lib/workbench/packets.mjs';
 import { workbenchRoutes } from '../../lib/workbench/http.mjs';
 import { setup, restart, rid, DEFAULTS, HUMAN, cleanup, tmpBase, readJson } from './helpers.mjs';
 
-after(cleanup);
+const schedulers = [];
+// 先停掉调度（取消还没执行的检查），再删临时目录
+after(async () => {
+  for (const s of schedulers) s.stop();
+  await cleanup();
+});
 const P = '样本';
 const TEXT = '神话学家指出，没有证据表明 A 导致 B。该书第 3 章记载当地人口为 1200 人。';
 const PEOPLE = [
@@ -39,8 +44,8 @@ async function env(protocol = null) {
 }
 
 // 假参与者：script[参与者] 是回复数组或 (prompt) => 回复；回复是文字，或抛出的错误（{ throw: Error }）
-function world(e, script = {}, { store = null, clock = null } = {}) {
-  const lookup = Object.assign((id) => PEOPLE.find((p) => p.id === id) ?? null, { all: () => PEOPLE });
+function world(e, script = {}, { store = null, clock = null, people = PEOPLE, onEvent = () => {} } = {}) {
+  const lookup = Object.assign((id) => people.find((p) => p.id === id) ?? null, { all: () => people });
   const prompts = [];
   const base = tmpBase();
   const now = clock ? () => new Date(clock.t) : () => new Date();
@@ -59,7 +64,8 @@ function world(e, script = {}, { store = null, clock = null } = {}) {
     onFailure: (x) => scheduler.noteFailure(x),
     handoffOf: (p) => scheduler.handoffOf(p),
   });
-  scheduler = createScheduler({ workbench: e.workbench, gateway: e.gw, board: e.board, runner, participants: lookup, store, cooldownFile: path.join(base, '_cooldowns.json'), now });
+  scheduler = createScheduler({ workbench: e.workbench, gateway: e.gw, board: e.board, runner, participants: lookup, store, cooldownFile: path.join(base, '_cooldowns.json'), now, onEvent });
+  schedulers.push(scheduler);
   return { runner, scheduler, prompts, cooldownFile: path.join(base, '_cooldowns.json'), lookup };
 }
 
@@ -373,4 +379,204 @@ test('接口：开关自动调度、跑一轮、切换阶段只限主持人；�
   const s = await call('GET', `${base}/scheduler`);
   assert.deepEqual([s.auto, s.phase.id, s.phase.name], [true, 'goal', '明确目标']);
   await call('POST', `${base}/scheduler/auto`, { on: false });
+});
+
+// ---------- WP6 评审（Astra，R1–R3）----------
+
+const ONLY_CLAUDE = PEOPLE.filter((p) => p.id === 'claude');
+const nextTurn = () => new Promise((r) => setImmediate(r));
+const schedulerEvents = (events) => events.filter((x) => x.type === 'scheduler').length;
+// 让写到 target（按 pred 判断）的第 n 次改名失败（ENOSPC），其余照常；返回还原函数
+function failRename(pred, n = 1) {
+  const original = fs.renameSync;
+  let hit = 0;
+  fs.renameSync = (from, to, ...rest) => {
+    if (pred(path.resolve(String(to))) && ++hit === n) throw Object.assign(new Error('注入：写盘失败'), { code: 'ENOSPC' });
+    return original(from, to, ...rest);
+  };
+  return () => (fs.renameSync = original);
+}
+
+test('评审 R1：自动调度一个都没派出去时也保存原因（缺分工、手上有任务、冷却中）；结果和上次一样时定时检查不写盘；重启后读得到', async () => {
+  const e = await env();
+  const clock = { t: Date.parse('2026-10-19T03:00:00Z') };
+  const events = [];
+  let release;
+  const w = world(e, { claude: [new Promise((r) => (release = r))] }, { clock, people: ONLY_CLAUDE, onEvent: (ev) => events.push(ev) });
+  const tA = task(e, { type: 'extract_claims' }); // 分工表 extract → deepseek，这里没有
+  w.scheduler.setAuto(P, true, '主持人');
+  await nextTurn();
+  let last = w.scheduler.state(P).last;
+  assert.deepEqual([last.by, last.dispatched], ['auto', []]);
+  assert.match(last.skipped.find((x) => x.task === tA.id).reason, /分工表（routing）里没有能做 extract_claims 的参与者/);
+  // 之后的定时检查结果一样：不写盘、不发事件，时间仍是这个结果第一次出现的时间
+  const firstAt = last.at;
+  const n = schedulerEvents(events);
+  clock.t += 60_000;
+  w.scheduler.tick();
+  w.scheduler.tick();
+  assert.equal(schedulerEvents(events), n);
+  assert.equal(w.scheduler.state(P).last.at, firstAt);
+  // 手上有任务：claude 正在做别的（不是这一轮派的）
+  const busyTask = task(e, { type: 'outline', assigned_to: 'claude' });
+  w.runner.dispatch(P, busyTask.id, 'claude');
+  const tC = task(e, { type: 'outline', assigned_to: 'claude' });
+  w.scheduler.tick();
+  last = w.scheduler.state(P).last;
+  assert.match(last.skipped.find((x) => x.task === tC.id).reason, /claude 手上还有进行中的任务/);
+  assert.equal(schedulerEvents(events), n + 1);
+  // 冷却中
+  release('## 一\n大纲。');
+  await w.runner.idle();
+  w.scheduler.noteFailure({ project: P, participant: ONLY_CLAUDE[0], error: Object.assign(new Error('usage limit reached'), { kind: 'exit' }) });
+  w.scheduler.tick();
+  last = w.scheduler.state(P).last;
+  assert.match(last.skipped.find((x) => x.task === tC.id).reason, /claude 冷却到 .*命令行 Agent 额度用完或被限流/);
+  assert.equal(e.board.get(P, tC.id).state, 'open');
+  // 重启：原因从 workflow.json 读回来
+  const fresh = createScheduler({ workbench: e.workbench, gateway: e.gw, board: e.board, runner: w.runner, participants: w.lookup, cooldownFile: w.cooldownFile, now: () => new Date(clock.t) });
+  const reasons = fresh.state(P).last.skipped.map((x) => x.reason).join('\n');
+  assert.match(reasons, /没有能做 extract_claims/);
+  assert.match(reasons, /claude 冷却到/);
+  w.scheduler.setAuto(P, false, '主持人');
+});
+
+test('评审 R1：自动调度到了上限之后一个都不再试，任务不会被一次次转进“待你决定”；原因落盘、重启后仍在，待你决定里有提示', async () => {
+  const e = await env({ budget: { calls: 1 } });
+  const w = world(e, { claude: ['## 一\n甲。'] });
+  const a = task(e, { type: 'outline', assigned_to: 'claude' });
+  const b = task(e, { type: 'outline', assigned_to: 'codex' });
+  const c = task(e, { type: 'outline', assigned_to: 'codex' });
+  w.scheduler.setAuto(P, true, '主持人');
+  await nextTurn();
+  assert.deepEqual(w.scheduler.state(P).round.tasks, [a.id]);
+  assert.equal(e.board.get(P, b.id).state, 'needs_user'); // 派发时超出上限：这个任务转“待你决定”，这一轮不再往下派
+  await w.runner.idle();
+  // 收轮后的自动检查：已到上限，c 不再去试
+  for (let i = 0; i < 3; i++) w.scheduler.tick();
+  assert.equal(e.board.get(P, c.id).state, 'open');
+  const last = w.scheduler.state(P).last;
+  assert.equal(last.budget_hit, true);
+  assert.match(last.skipped.find((x) => x.task === c.id).reason, /项目用量已到上限：调用次数已到上限（1\/1）/);
+  assert.deepEqual(w.scheduler.inbox(P).map((i) => i.type), ['scheduler_budget']);
+  const fresh = createScheduler({ workbench: e.workbench, gateway: e.gw, board: e.board, runner: w.runner, participants: w.lookup });
+  assert.equal(fresh.state(P).last.budget_hit, true);
+  w.scheduler.setAuto(P, false, '主持人');
+});
+
+test('评审 R2：阶段切换中途失败（写交接单、写归档、最后写 workflow.json）：阶段不变，旧记忆要么原样在、要么在待办记下的归档里；再切一次（含重启后）做完，历史指向含原笔记的归档', async () => {
+  const e = await env();
+  const forum = path.join(tmpBase(), 'forum.json');
+  let store = createStore(forum);
+  const clock = { t: Date.parse('2026-10-19T00:00:00Z') };
+  let w = world(e, {}, { store, clock });
+  const dir = e.workbench.get(P).dir;
+  const note = (phase, content) => store.addMemory(`${phaseSpace(store, P, phase).id}/claude`, { name: 'Claude', content, source: 'test' });
+  const live = (phase) => store.getMemory(`${phaseSpace(store, P, phase).id}/claude`);
+  const archiveOf = (h) => readJson(path.join(dir, h.memory.file));
+  w.scheduler.switchPhase(P, 'goal', '主持人');
+  task(e, { type: 'outline', assigned_to: 'claude' }); // 有已就绪的任务：待办没做完时不派
+
+  // ① 写交接单失败（Astra 的复现）：旧记忆原样在，阶段不变，待办留着
+  note('明确目标', '目标阶段的笔记');
+  let restore = failRename((to) => to === path.resolve(dir, 'handoff', 'H002.md'));
+  try {
+    assert.throws(() => w.scheduler.switchPhase(P, 'sources', '主持人'), /注入/);
+  } finally {
+    restore();
+  }
+  let s = w.scheduler.state(P);
+  assert.equal(s.phase.id, 'goal');
+  assert.deepEqual([s.switching.to, s.switching.to_name, s.switching.error.message], ['sources', '收集来源', '注入：写盘失败']);
+  assert.equal(live('明确目标').content, '目标阶段的笔记');
+  assert.match(w.scheduler.inbox(P).find((i) => i.type === 'phase_switch').reason, /切换到“收集来源”没完成（注入：写盘失败）/);
+  // 待办没做完：不能切到别的阶段，不能跑一轮，自动调度也不派
+  assert.throws(() => w.scheduler.switchPhase(P, 'claims', '主持人'), (err) => err.status === 409 && /还没完成/.test(err.message));
+  assert.throws(() => w.scheduler.runOnce(P, '主持人'), (err) => err.status === 409 && /还没完成/.test(err.message));
+  w.scheduler.setAuto(P, true, '主持人');
+  await nextTurn();
+  assert.match(w.scheduler.state(P).last.blocked, /切换到“收集来源”阶段还没完成/);
+  assert.equal(w.scheduler.state(P).round, null);
+  w.scheduler.setAuto(P, false, '主持人');
+  clock.t += 1000;
+  w.scheduler.switchPhase(P, 'sources', '主持人');
+  let h = w.scheduler.state(P).phase_history.at(-1);
+  assert.deepEqual([h.id, h.from, h.to, h.memory.archived, h.recovered_from.message], ['H002', 'goal', 'sources', 1, '注入：写盘失败']);
+  assert.equal(archiveOf(h).notebooks[`${phaseSpace(store, P, '明确目标').id}/claude`][0].content, '目标阶段的笔记');
+  assert.equal(live('明确目标'), null);
+  assert.equal(w.scheduler.state(P).switching, null);
+  assert.equal(w.scheduler.state(P).last, null, '“切换没做完、暂停派发”的结果做完后清掉');
+  assert.match(w.scheduler.handoff(P, 'H002'), /明确目标 → 收集来源/);
+
+  // ② 写归档失败：记忆原样在，再切一次就做完
+  note('收集来源', '来源阶段的笔记');
+  restore = failRename((to) => to.includes(`${path.sep}archive${path.sep}memory${path.sep}`) && to.endsWith('-H003.json'));
+  try {
+    assert.throws(() => w.scheduler.switchPhase(P, 'claims', '主持人'), /注入/);
+  } finally {
+    restore();
+  }
+  assert.equal(w.scheduler.state(P).phase.id, 'sources');
+  assert.equal(live('收集来源').content, '来源阶段的笔记');
+  w.scheduler.switchPhase(P, 'claims', '主持人');
+  h = w.scheduler.state(P).phase_history.at(-1);
+  assert.equal(h.memory.archived, 1);
+  assert.equal(Object.values(archiveOf(h).notebooks)[0][0].content, '来源阶段的笔记');
+
+  // ③ 归档、清空都做了，最后写 workflow.json 失败：阶段不变，待办记着归档文件；
+  //    重启后继续写进旧空间的笔记，重做时合并进同一份归档
+  note('抽取论断', '论断阶段的笔记');
+  const wf = path.resolve(dir, 'workflow.json');
+  restore = failRename((to) => to === wf, 2); // 第 1 次是记下待办，第 2 次是最后改阶段状态
+  try {
+    assert.throws(() => w.scheduler.switchPhase(P, 'outline', '主持人'), /注入/);
+  } finally {
+    restore();
+  }
+  s = w.scheduler.state(P);
+  assert.equal(s.phase.id, 'claims');
+  assert.equal(live('抽取论断'), null);
+  const pendingFile = s.switching.archive;
+  assert.equal(Object.values(readJson(path.join(dir, pendingFile)).notebooks)[0][0].content, '论断阶段的笔记');
+  // 重启：新的记忆存储与调度实例读同一份文件
+  store = createStore(forum);
+  w = world(e, {}, { store, clock });
+  note('抽取论断', '失败之后又写的笔记');
+  clock.t += 1000;
+  w.scheduler.switchPhase(P, 'outline', '主持人');
+  s = w.scheduler.state(P);
+  h = s.phase_history.at(-1);
+  assert.deepEqual([s.phase.id, h.id, h.memory.file], ['outline', 'H004', pendingFile]);
+  assert.deepEqual(Object.values(archiveOf(h).notebooks)[0].map((r) => r.content), ['论断阶段的笔记', '失败之后又写的笔记']);
+  assert.equal(live('抽取论断'), null);
+  assert.equal(s.phase.space, phaseSpace(store, P, '大纲').id);
+  assert.deepEqual(s.phase_history.map((x) => x.id), ['H001', 'H002', 'H003', 'H004']);
+});
+
+test('评审 R3：截断后的讨论不超过预算——多条长表决结果、大背景、项目与非项目两种；关键决议的开头和最近发言仍在', () => {
+  const posts = [
+    { author: '主持人', kind: 'human', content: '开题：要不要换开场？' },
+    ...Array.from({ length: 3 }, (_, i) => ({ author: '表决', kind: 'system', type: 'result', content: `第 ${i + 1} 次表决：未通过。请求证据：${'证'.repeat(2400)}` })),
+    ...Array.from({ length: 8 }, (_, i) => ({ author: 'Claude', kind: 'ai', content: `最近 ${i + 1}：${'近'.repeat(260)}` })),
+  ];
+  for (const preface of [null, '受众：新同事', `受众：新同事\n${'交'.repeat(10_000)}`]) {
+    for (const maxChars of [1500, 3000, 6000]) {
+      const text = formatTranscript(posts, maxChars, null, preface);
+      const at = `preface=${preface?.length ?? 0} maxChars=${maxChars}`;
+      assert.ok(text.length <= maxChars, `${at}：${text.length} 字`);
+      assert.match(text, /最近 8：/, at);
+      // 最近的表决结果要么在最近发言里（全文），要么在决议摘要里（开头）
+      assert.match(text, /第 3 次表决：未通过/, at);
+      assert.match(text, /【决议摘要：省略部分里的表决结果】\n【#\d 表决结果】\n第 \d 次表决：未通过。请求证据：证+……（后面省略，全文见 #\d）/, at);
+      if (preface) assert.match(text, /^【背景：项目约定与阶段交接单】\n受众：新同事/, at);
+      else assert.match(text, /开题：要不要换开场/, at);
+      if (preface?.length > 5000) assert.match(text, /背景太长，后面省略/, at);
+    }
+  }
+  // 最近一条发言本身就超过预算：只留开头
+  const huge = [...posts.slice(0, 2), { author: 'Codex', kind: 'ai', content: `超长发言：${'长'.repeat(5000)}` }];
+  const text = formatTranscript(huge, 2000, null, '约定');
+  assert.ok(text.length <= 2000);
+  assert.match(text, /超长发言：长+……（这条发言太长，后面省略）/);
+  assert.match(text, /第 1 次表决：未通过/);
 });

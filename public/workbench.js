@@ -280,7 +280,7 @@ const VIEWS = {
       write_fault: '写入故障：已停止接受写入，请重启服务完成恢复', external_change: '服务进程之外改过的记录文件', bad_record_file: '读不出来的记录文件', archive_failed: 'git 留档失败',
       task_failed: '任务失败（尝试次数用完，不再自动重派）', task_needs_user: '任务待你决定', budget_exceeded: '项目用量已到上限',
       objection_needs_user: '异议待你裁决', claim_disputed: '论断的核验结论不一致', competition: '竞争需要你处理',
-      stagnation: '连续停滞，交给你决定', scheduler_budget: '自动调度到了用量上限',
+      stagnation: '连续停滞，交给你决定', scheduler_budget: '自动调度到了用量上限', phase_switch: '阶段切换没完成',
     });
     const where = (i) => (i.competition ? `<a href="#" data-k="${esc(i.competition)}"><code>${esc(i.competition)}</code></a>`
       : i.objection || i.claim ? `<a href="#" data-goto="${esc(i.objection ?? i.claim)}"><code>${esc(i.objection ?? i.claim)}</code></a>` : `<code>${esc(i.path ?? i.cid ?? i.task ?? '')}</code>`);
@@ -314,13 +314,23 @@ const VIEWS = {
     if ([...sel.options].some((o) => o.value === keep)) sel.value = keep;
     else if (at + 1 < s.phases.length && at >= -1) sel.value = s.phases[at + 1].id;
     const pname = (id) => ui(s.phases.find((x) => x.id === id)?.name ?? '（开始）');
-    $('#phaseHistory').innerHTML = s.phase_history.length
-      ? `<ul>${s.phase_history.slice().reverse().map((h) => ui`<li>${time(h.at)} · ${esc(h.from ? pname(h.from) : ui('（开始）'))} → ${esc(pname(h.to))} · 交接单 <a href="#" data-h="${esc(h.id)}"><code>${esc(h.id)}</code></a>${h.memory ? ui` · 归档了 ${h.memory.archived} 份工作笔记` : ''}</li>`).join('')}</ul>`
-      : ui('<p class="hint">还没有设阶段。切换到第一个阶段时生成第一份交接单。</p>');
+    // 上一次切换中途失败：阶段没变，待办还在，再切换一次就从头重做
+    const sw = s.switching;
+    const pending = sw
+      ? ui`<p>${badge(ui('阶段切换没完成'), 'b-bad')} 切换到“${esc(ui(sw.to_name))}”还没完成${sw.error ? ui`：${esc(sw.error.message)}` : ''}。阶段仍是原来的，调度暂停派发；再切换一次把它做完。</p>
+        <p><button id="phaseResume" class="primary">继续切换到“${esc(ui(sw.to_name))}”</button></p>
+        ${sw.archive ? ui`<p class="hint">旧阶段的工作笔记归档在 <code>${esc(sw.archive)}</code>，重做时合并进同一份归档，不会再归档一份空的。</p>` : ''}`
+      : '';
+    $('#phaseHistory').innerHTML = pending + (s.phase_history.length
+      ? `<ul>${s.phase_history.slice().reverse().map((h) => ui`<li>${time(h.at)} · ${esc(h.from ? pname(h.from) : ui('（开始）'))} → ${esc(pname(h.to))} · 交接单 <a href="#" data-h="${esc(h.id)}"><code>${esc(h.id)}</code></a>${h.memory ? ui` · 归档了 ${h.memory.archived} 份工作笔记` : ''}${h.recovered_from ? ui(' · 中途失败过，重做后完成') : ''}</li>`).join('')}</ul>`
+      : ui('<p class="hint">还没有设阶段。切换到第一个阶段时生成第一份交接单。</p>'));
+    if (sw) $('#phaseResume').onclick = () => switchPhase(sw.to);
     $('#autoOn').checked = s.auto;
     const r = s.round;
     $('#roundNow').innerHTML = r
       ? ui`<p>${badge(ui`第 ${r.n} 轮进行中`, 'b-warn')} ${esc(r.phase_name ? ui(r.phase_name) : '')}：${r.live.map((x) => `<code>${esc(x.task)}</code> ${badge(...(TASK_STATE[x.state] ?? [x.state, 'b-muted']))}`).join(' ')}</p>`
+      : s.last?.blocked
+        ? ui('<p class="hint">阶段切换没完成，调度暂停派发。</p>')
       : s.last
         ? ui`<p class="hint">上次派发：${time(s.last.at)}，派出 ${s.last.dispatched.length} 个任务${s.last.skipped.length ? ui`，${s.last.skipped.length} 个没派出去` : ''}。</p>${s.last.skipped.length ? `<details><summary>${esc(ui('没派出去的原因'))}</summary><ul>${s.last.skipped.map((x) => `<li><code>${esc(x.task)}</code> <span class="hint">${esc(x.reason)}</span></li>`).join('')}</ul></details>` : ''}`
         : ui('<p class="hint">还没有派发过。</p>');
@@ -961,9 +971,8 @@ $('#runOnce').onclick = async () => {
   VIEWS.schedule().catch(fail);
 };
 
-$('#phaseSwitch').onclick = async () => {
-  const to = $('#phaseTo').value;
-  if (!to || !confirm(ui`切换到“${$('#phaseTo').selectedOptions[0].textContent}”阶段？旧阶段的工作记忆会先归档再清空。`)) return;
+// 切换阶段（也用于把中途失败的切换做完）；失败后刷新，显示没做完的切换
+async function switchPhase(to) {
   try {
     const r = await api('POST', P('/phase'), { to });
     toast(ui`已切换阶段，交接单 ${r.handoff.id}`);
@@ -971,7 +980,14 @@ $('#phaseSwitch').onclick = async () => {
     await showHandoff(r.handoff.id);
   } catch (err) {
     fail(err);
+    VIEWS.schedule().catch(fail);
   }
+}
+
+$('#phaseSwitch').onclick = () => {
+  const to = $('#phaseTo').value;
+  if (!to || !confirm(ui`切换到“${$('#phaseTo').selectedOptions[0].textContent}”阶段？旧阶段的工作记忆会先归档再清空。`)) return;
+  switchPhase(to);
 };
 
 loadProjects();
