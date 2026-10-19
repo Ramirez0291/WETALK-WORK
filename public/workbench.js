@@ -111,9 +111,9 @@ async function render() {
     await VIEWS[tab]?.(inbox);
     // 打开着的记录详情（例如核验结果陆续回来）一起刷新；正在填表单时不刷，免得冲掉输入
     const box = $('#recordDetail');
-    if (tab === 'records' && openRecord && !box.hidden && !box.contains(document.activeElement) && !box.querySelector('details[open]')) await showRecord(openRecord, { scroll: false });
+    if (tab === 'records' && openRecord && !box.hidden && !box.contains(document.activeElement) && !box.querySelector('details[open]')) await showRecord(openRecord, { scroll: false, keep: true });
     const kb = $('#competitionDetail');
-    if (tab === 'compete' && openCompetition && !kb.hidden && !kb.contains(document.activeElement)) await showCompetition(openCompetition, { scroll: false });
+    if (tab === 'compete' && openCompetition && !kb.hidden && !kb.contains(document.activeElement)) await showCompetition(openCompetition, { scroll: false, keep: true });
   } catch (e) {
     fail(e);
   }
@@ -222,7 +222,7 @@ const VIEWS = {
         ${list.map((c) => `<tr>
           <td><code>${esc(c.sid)}</code></td><td>${time(c.received_at)}</td>
           <td>${c.applied ? badge(ui`已晋升（提交 ${c.applied}）`, 'b-ok') : c.state === 'draft' ? badge(ui('历史草稿'), 'b-muted') : badge(ui('待晋升'), 'b-warn')}</td>
-          <td>${!c.applied && c.state === 'received' ? ui`<button class="primary" data-promote="${esc(c.sid)}">晋升</button>` : ''}</td>
+          <td>${c.owner ? ui`<span class="hint">属于 ${esc(c.owner)}，由它的流程晋升</span>` : !c.applied && c.state === 'received' ? ui`<button class="primary" data-promote="${esc(c.sid)}">晋升</button>` : ''}</td>
         </tr>`).join('')}</table></div>`
       : ui('<p class="hint">没有候选稿。</p>');
     for (const b of document.querySelectorAll('[data-promote]')) b.onclick = () => promote(b.dataset.promote);
@@ -357,13 +357,40 @@ const VIEWS = {
 
 $('#kindFilter').onchange = () => VIEWS.records();
 
+// 重画详情（切换语言、实时刷新）时保留没提交的输入和展开着的折叠块：先记下，重画后填回。
+// 折叠块按出现顺序对应（切换语言后标题文字会变）；输入按 id、补丁理由框的编号或勾选框的 name＋value 对应。
+// 提交成功后的重画不保留（keep 为假），免得把刚提交过的内容又填回去
+function keepState(box) {
+  const keyOf = (el) => (el.id ? `#${el.id}` : el.dataset.pReason ? `p:${el.dataset.pReason}` : el.name ? `${el.name}=${el.value}` : null);
+  const opened = [...box.querySelectorAll('details')].map((d) => d.open);
+  const values = new Map();
+  for (const el of box.querySelectorAll('input, textarea, select')) {
+    const k = keyOf(el);
+    if (k) values.set(k, el.type === 'checkbox' ? el.checked : el.value);
+  }
+  return () => {
+    box.querySelectorAll('details').forEach((d, i) => opened[i] && (d.open = true));
+    for (const el of box.querySelectorAll('input, textarea, select')) {
+      const k = keyOf(el);
+      if (!k || !values.has(k)) continue;
+      if (el.type === 'checkbox') el.checked = values.get(k);
+      else if (el.tagName !== 'SELECT' || [...el.options].some((o) => o.value === values.get(k))) {
+        el.value = values.get(k);
+        el.onchange?.(); // 例如换了来源方案，节的选项跟着换
+      }
+    }
+  };
+}
+
 let openRecord = null; // 记录标签页里打开着的详情：实时事件到来时一起刷新
-async function showRecord(id, { scroll = true } = {}) {
+async function showRecord(id, { scroll = true, keep = false } = {}) {
   openRecord = id;
   const r = await api('GET', P(`/records/${id}`));
   const s = r.status;
   const link = (x) => `<a href="#" data-goto="${x}"><code>${x}</code></a>`;
   const box = $('#recordDetail');
+  const restore = keep && openRecord === box.dataset.id ? keepState(box) : null;
+  box.dataset.id = id;
   box.hidden = false;
   const stale = (x) => (x.type === 'version' ? ui`${x.id} 已从 v${x.based} 更新到 v${x.current}` : x.type === 'upstream' ? ui`上游 ${x.id} 待更新` : x.type === 'missing' ? ui`${x.id} 不存在`
     : x.type === 'external' ? (x.change === 'deleted' ? ui('正式文件在服务之外被删除，这里显示的是已提交的内容') : ui('正式文件在服务之外被改动，这里显示的是已提交的内容')) : ui('循环引用'));
@@ -384,6 +411,7 @@ async function showRecord(id, { scroll = true } = {}) {
   bindLinks(box);
   bindContract1(box, r);
   box.querySelector('[data-talk]').onclick = () => startTalk(r);
+  restore?.();
   if (scroll) box.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
 }
 
@@ -667,12 +695,15 @@ $('#newCompetition').onsubmit = async (e) => {
 };
 
 let openCompetition = null; // 竞争标签页里打开着的详情：实时事件到来时一起刷新
-async function showCompetition(id, { scroll = true } = {}) {
+async function showCompetition(id, { scroll = true, keep = false } = {}) {
   openCompetition = id;
   const k = await api('GET', P(`/competitions/${id}`));
   const box = $('#competitionDetail');
-  // 重画时保留展开着的折叠块
-  const open = new Set([...box.querySelectorAll('details[open] > summary')].map((x) => x.textContent));
+  // 重画时保留展开着的折叠块（同一次竞争）；切换语言、实时刷新时连没提交的输入一起保留
+  const same = box.dataset.id === id;
+  const opened = same ? [...box.querySelectorAll('details')].map((d) => d.open) : [];
+  const restore = keep && same ? keepState(box) : null;
+  box.dataset.id = id;
   box.hidden = false;
   const at = K_STEPS.findIndex(([st]) => st === (k.stage === 'insufficient' ? 'review_ready' : k.stage === 'cancelled' ? null : k.stage));
   const FIN = ['done', 'failed', 'cancelled'];
@@ -684,6 +715,7 @@ async function showCompetition(id, { scroll = true } = {}) {
   box.innerHTML = ui`
     <h3><code>${esc(k.id)}</code> · ${esc(k.title)} ${badge(...K_STAGE[k.stage])}</h3>
     <div class="steps">${K_STEPS.map(([, label], i) => `<span class="${i === at ? 'on' : at > i ? 'done' : ''}">${esc(ui(label))}</span>`).join('')}</div>
+    ${k.pending ? `<p>${badge(ui('上一个操作的结果还没确认'), 'b-bad')} <span class="hint">${esc(k.pending.action === 'select' ? ui('选定') : ui('书记应用补丁'))} · ${esc(ui('原样重试，或重启服务恢复后再看'))}</span></p>` : ''}
     <p class="hint">${esc(k.type)}，选定后写成${esc(KIND[k.kind])}。${k.goal ? ui`要求：${esc(k.goal)}。` : ''}${k.inputs.length ? ui`输入：${k.inputs.map((x) => `<code>${esc(x.id)}</code>@${x.version}`).join(ui('、'))}` : ''}</p>
 
     <h4>方案（密封起草）</h4>
@@ -724,9 +756,10 @@ async function showCompetition(id, { scroll = true } = {}) {
     <p>${k.stage === 'patching' ? ui('<button data-k-act="close">结束竞争</button>') : ''}
       ${!k.selection && !['cancelled', 'closed'].includes(k.stage) ? ui('<button data-k-act="cancel">取消竞争</button>') : ''}</p>
     <details><summary>流程记录（${k.history.length} 步）</summary><ul>${k.history.map((h) => `<li>${time(h.at)} · ${esc(h.by ?? '')} · ${esc(H_ACTION[h.action] ?? h.action)}${h.patch ? ` ${esc(h.patch)}` : ''}${h.label ? ` ${esc(h.label)}` : ''}${h.reason ? ui`：${esc(h.reason)}` : ''}</li>`).join('')}</ul></details>`;
-  for (const x of box.querySelectorAll('details > summary')) if (open.has(x.textContent)) x.parentElement.open = true;
+  box.querySelectorAll('details').forEach((d, i) => opened[i] && (d.open = true));
   bindLinks(box);
   bindCompetition(box, k);
+  restore?.();
   if (scroll) box.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
 }
 
@@ -839,8 +872,8 @@ $('#languageSelect').onchange = async (e) => {
   try {
     await loadProjects(project);
     if (!project) return;
-    if (openRecord && !$('#recordDetail').hidden) await showRecord(openRecord, { scroll: false });
-    if (openCompetition && !$('#competitionDetail').hidden) await showCompetition(openCompetition, { scroll: false });
+    if (openRecord && !$('#recordDetail').hidden) await showRecord(openRecord, { scroll: false, keep: true });
+    if (openCompetition && !$('#competitionDetail').hidden) await showCompetition(openCompetition, { scroll: false, keep: true });
     if (openPacket && !$('#taskDetail').hidden) await showPacket(openPacket, { scroll: false });
   } catch (err) {
     fail(err);

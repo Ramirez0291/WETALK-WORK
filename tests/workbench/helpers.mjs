@@ -25,7 +25,8 @@ export async function cleanup() {
     await gw.queue.idle();
     gw.stop();
   }
-  for (const base of created.splice(0)) fs.rmSync(base, { recursive: true, force: true });
+  // Windows 上文件可能还被短暂占用（EPERM / EBUSY）：删除时退避重试
+  for (const base of created.splice(0)) fs.rmSync(base, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
 }
 
 export const rid = () => `req-${crypto.randomBytes(6).toString('hex')}`;

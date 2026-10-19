@@ -226,7 +226,8 @@ test('R3: null is only accepted where a field is nullable, and open maps still v
     [{ rounds: 0 }, /rounds 必须是不小于 1 的整数/],
     [{ rounds: 'many' }, /rounds 必须是不小于 1 的整数/],
     [{ export: { template: 3 } }, /export.template 必须是非空字符串/],
-    [{ compete: { drafts: 1 } }, /compete.drafts 必须是不小于 2 的整数/],
+    [{ compete: { drafts: 1 } }, /compete.drafts 必须是 2 到 6 之间的整数/],
+    [{ compete: { drafts: 7 } }, /compete.drafts 必须是 2 到 6 之间的整数/], // 匿名评审的标签只有六个
     [{ render: { engine: 'keynote' } }, /render.engine 只能是/],
     [{ memory: { loadByDefault: ['everything'] } }, /memory.loadByDefault 第 1 项只能是/],
     [{ retry: { delaysSec: [2, -1] } }, /retry.delaysSec 第 2 项必须是不小于 0/],

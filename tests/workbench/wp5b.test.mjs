@@ -7,12 +7,13 @@ import path from 'node:path';
 import { createTaskBoard } from '../../lib/workbench/tasks.mjs';
 import { createUsage } from '../../lib/workbench/usage.mjs';
 import { createRunner } from '../../lib/workbench/runner.mjs';
-import { createSealedStore, anonymityTerms, findNames } from '../../lib/workbench/visibility.mjs';
+import { createSealedStore, anonymityTerms, findNames, LABELS } from '../../lib/workbench/visibility.mjs';
 import { createCompetitions } from '../../lib/workbench/compete.mjs';
 import { createDivisions, partition } from '../../lib/workbench/divide.mjs';
-import { sectionsOf, parseReview, applyPatches, checkPatch, patchConflict, numberSections, claimRefsIn } from '../../lib/workbench/modes.mjs';
+import { sectionsOf, parseReview, applyPatches, checkPatch, patchConflict, numberSections, bindClaims, claimIdsIn } from '../../lib/workbench/modes.mjs';
 import { authorsOf } from '../../lib/workbench/verify.mjs';
 import { workbenchRoutes } from '../../lib/workbench/http.mjs';
+import { restorePacket } from '../../lib/workbench/packets.mjs';
 import { setup, restart, rid, DEFAULTS, HUMAN, cleanup, tmpBase } from './helpers.mjs';
 
 after(cleanup);
@@ -36,8 +37,8 @@ async function env() {
 }
 
 // 一套假的参与者：script[参与者] 是回复数组或 (prompt) => 回复；回复可以是文字或 { raw, audit }，也可以是 Promise
-function world(e, script = {}, { board = e.board, sealed = createSealedStore() } = {}) {
-  const lookup = Object.assign((id) => PEOPLE.find((p) => p.id === id) ?? null, { all: () => PEOPLE });
+function world(e, script = {}, { board = e.board, sealed = createSealedStore(), people = PEOPLE } = {}) {
+  const lookup = Object.assign((id) => people.find((p) => p.id === id) ?? null, { all: () => people });
   const prompts = [];
   const base = tmpBase();
   const runner = createRunner({
@@ -212,7 +213,8 @@ test('竞争全流程：密封起草 → 揭晓 → 匿名评审（指不到位�
   v = await c.close(P, 'K001', HUMAN);
   assert.equal(v.stage, 'closed');
   assert.deepEqual(v.minority.skipped_patches.map((p) => p.id), ['P5']);
-  assert.deepEqual(v.history.map((h) => h.action), ['create', 'review', 'select', 'patch_proposed', 'patch_proposed', 'patch_proposed', 'patch_proposed', 'patch_accepted', 'patch_accepted', 'patch_rejected', 'patch_rejected', 'apply', 'patch_proposed', 'patch_accepted', 'close']);
+  // 书记那次被拒：先记下的待办按提交结果撤掉（pending_dropped），流程记录里留着
+  assert.deepEqual(v.history.map((h) => h.action), ['create', 'review', 'select', 'patch_proposed', 'patch_proposed', 'patch_proposed', 'patch_proposed', 'patch_accepted', 'patch_accepted', 'patch_rejected', 'patch_rejected', 'apply', 'patch_proposed', 'patch_accepted', 'pending_dropped', 'close']);
 });
 
 test('竞争：两位评审看到的标签一致；独立性未证明的评审整份退回；评审全部失败时可以再发起一轮', async () => {
@@ -296,7 +298,7 @@ test('竞争：同一个竞争的改动逐个执行：选定等待晋升期间�
   await c.review(P, 'K001', { reviewers: ['deepseek-pro'] }, HUMAN);
   await w.runner.idle();
   c.reveal(P, 'K001');
-  const label = c.view(P, 'K001').label_drafts[0].label;
+  const label = c.view(P, 'K001').label_drafts.find((l) => l.participant === 'codex').label;
   const selecting = c.select(P, 'K001', { label, reason: '好' }, HUMAN);
   const reviewing = c.review(P, 'K001', { reviewers: ['gemini'] }, HUMAN);
   await selecting;
@@ -331,7 +333,7 @@ test('分节：总标题下的二级标题是节；前言加各节首尾相接�
   assert.deepEqual(sectionsOf('# 甲\n正文\n# 乙\n```\n# 不是标题\n```\n').sections.map((x) => x.title), ['甲', '乙']);
   assert.deepEqual(sectionsOf('没有标题的方案').sections.map((x) => x.n), [1]);
   assert.match(numberSections(DRAFT_A), /## 边界 〔第 3 节〕\n/);
-  assert.deepEqual(claimRefsIn('见 C001、C002 与 XC003', [{ id: 'C001', version: 3 }, { id: 'C003', version: 1 }]), [{ id: 'C001', version: 3 }]);
+  assert.deepEqual(bindClaims('见 C001、C002 与 XC003', [{ id: 'C001', version: 3 }, { id: 'C003', version: 1 }]), { refs: [{ id: 'C001', version: 3 }], unknown: ['C002'] });
 });
 
 test('评审意见：json 与逐行两种格式；没有指向具体位置、位置不存在、只有位置没有意见的都退回', () => {
@@ -447,7 +449,7 @@ test('接口：发起、选定、接受或拒绝只限主持人；MCP 会话可�
   const base = `/api/projects/${encodeURIComponent(P)}`;
   await assert.rejects(async () => call('POST', `${base}/compete`, { type: 'outline', participants: ['claude', 'codex'] }, false), (err) => err.status === 403);
   await assert.rejects(async () => call('POST', `${base}/divide`, { type: 'extract_claims', inputs: [{ id: 'S001', version: 1 }], participants: ['claude'] }, false), (err) => err.status === 403);
-  await call('POST', `${base}/compete`, { type: 'outline', title: '题目', participants: ['claude', 'codex'] });
+  await call('POST', `${base}/compete`, { type: 'outline', title: '题目', participants: ['claude', 'codex'], inputs: [{ id: 'C001', version: 1 }] });
   await w.runner.idle();
   await call('POST', `${base}/competitions/K001/reveal`, {});
   await call('POST', `${base}/competitions/K001/review`, { reviewers: ['deepseek-pro'] });
@@ -469,4 +471,259 @@ test('接口：发起、选定、接受或拒绝只限主持人；MCP 会话可�
   // 待你决定里有竞争的事项；有补丁待决定时出现
   const inbox = await call('GET', `${base}/inbox`);
   assert.deepEqual(inbox.filter((i) => i.type === 'competition'), []);
+});
+
+// ---------- WP5b 评审（Astra，R1–R6）----------
+
+const CLAUDE = { kind: 'server', participant: 'claude', adapter: 'claude', model: null, verified: true, basis: 'server-invoked' };
+const outlines = (e) => e.gw.listRecords(P, 'outline').map((x) => x.record.id);
+// 发起竞争、揭晓、评审、揭晓，到“待你选定”；返回两份方案的标签（A 是 claude 起草的）
+async function toSelecting(w, inputs = []) {
+  const c = w.competitions;
+  c.create(P, { type: 'outline', title: '题目', participants: ['claude', 'codex'], inputs }, HUMAN);
+  await w.runner.idle();
+  c.reveal(P, 'K001');
+  await c.review(P, 'K001', { reviewers: ['deepseek-pro'] }, HUMAN);
+  await w.runner.idle();
+  c.reveal(P, 'K001');
+  const v = c.view(P, 'K001');
+  assert.equal(v.stage, 'selecting');
+  return { A: v.label_drafts.find((l) => l.participant === 'claude').label, B: v.label_drafts.find((l) => l.participant === 'codex').label };
+}
+const ONE_REVIEW = '方案甲 第 1 节：开头要更具体。';
+// 只让第 n 次写这个竞争文件失败（ENOSPC），前面的照常写成
+function failNthSave(e, n) {
+  const target = path.resolve(e.workbench.get(P).dir, 'competitions', 'K001.json');
+  const original = fs.renameSync;
+  let hit = 0;
+  fs.renameSync = (from, to, ...rest) => {
+    if (path.resolve(String(to)) === target && ++hit === n) throw Object.assign(new Error('注入：写竞争文件失败'), { code: 'ENOSPC' });
+    return original(from, to, ...rest);
+  };
+  return () => (fs.renameSync = original);
+}
+
+test('评审 R1：从大纲、讲稿、页面起草时，正文里沿用的论断按输入快照绑定版本；未核验或有阻塞的论断让作品不能进入成品，论断升版后作品待更新', async () => {
+  const e = await env();
+  await sample(e); // S001、C001@1
+  await asHost(e, [{ kind: 'claim', expected_version: 0, data: { type: 'fact', text: '当地人口为 1200 人', sources: [{ id: 'S001', version: 1, quote: '当地人口为 1200 人' }] } }]); // C002
+  await asHost(e, [
+    { kind: 'outline', expected_version: 0, data: { title: '旧大纲', body: 'C001 是起点。', claims: [{ id: 'C001', version: 1 }] } },
+    { kind: 'script', expected_version: 0, data: { title: '旧讲稿', body: '讲到 C002。', claims: [{ id: 'C002', version: 1 }] } },
+    { kind: 'slide', expected_version: 0, data: { title: '旧页', body: '页里也引 C001。', claims: [{ id: 'C001', version: 1 }] } },
+  ]);
+  const w = world(e, { claude: ['# 甲 MARK-A\n\n## 问题\nC001 说明了起点，C002 给出人口。\n'], codex: ['# 乙 MARK-B\n\n## 开场\n人口见 C002。\n'], 'deepseek-pro': ONE_REVIEW });
+  const { A } = await toSelecting(w, [{ id: 'OL001', version: 1 }, { id: 'SC001', version: 1 }, { id: 'SL001', version: 1 }]);
+  assert.deepEqual(w.competitions.view(P, 'K001').citable, [{ id: 'C001', version: 1 }, { id: 'C002', version: 1 }]);
+  await w.competitions.select(P, 'K001', { label: A, reason: '好' }, HUMAN);
+  const id = outlines(e).at(-1);
+  assert.deepEqual(rec(e, id).claims, [{ id: 'C001', version: 1 }, { id: 'C002', version: 1 }]);
+  assert.equal(e.gw.getRecord(P, id).status.ready, false); // 两条论断都还没核验
+  // 两条论断都核验通过：作品可以进入成品
+  for (const cid of ['C001', 'C002']) {
+    await asAgent(e, CLAUDE, [{ kind: 'verification', expected_version: 0, data: { target: { id: cid, version: 1 }, source_versions: [{ id: 'S001', version: 1 }], verdict: 'supported', reason: '原文', support_quote: { id: 'S001', version: 1, quote: '当地人口为 1200 人' } } }]);
+  }
+  assert.equal(e.gw.getRecord(P, id).status.ready, true);
+  // 论断有阻塞异议：作品不能进入成品
+  await asHost(e, [{ kind: 'objection', expected_version: 0, data: { target: { id: 'C001', version: 1 }, category: 'quote_unsupported', pointer: { type: 'quote', source: { id: 'S001', version: 1 }, quote: '没有证据表明 A 导致 B' }, reason: '原文说的是没有证据', state: 'open' } }]);
+  assert.equal(e.gw.getRecord(P, id).status.ready, false);
+  // 论断升版：作品待更新
+  await asHost(e, [{ id: 'C002', expected_version: 1, data: { type: 'fact', text: '当地人口约 1200 人', sources: [{ id: 'S001', version: 1, quote: '当地人口为 1200 人' }] } }]);
+  const s = e.gw.getRecord(P, id).status;
+  assert.equal(s.freshness, 'stale');
+  assert.deepEqual(s.stale_reasons.map((x) => x.id), ['C002']);
+});
+
+test('评审 R1：正文里的论断编号对不上可引用论断时明确拒绝选定；输入里同一论断两个版本时拒绝发起；补丁搬来的原文同样检查，书记按搬来的原文补上论断', async () => {
+  const e = await env();
+  await sample(e);
+  await asHost(e, [{ kind: 'claim', expected_version: 0, data: { type: 'fact', text: '当地人口为 1200 人', sources: [{ id: 'S001', version: 1, quote: '当地人口为 1200 人' }] } }]); // C002
+  await asHost(e, [{ kind: 'outline', expected_version: 0, data: { title: '旧大纲', body: 'C001。', claims: [{ id: 'C001', version: 1 }] } }]);
+  await asHost(e, [{ id: 'C001', expected_version: 1, data: { type: 'fact', text: 'A 导致 B（改）', sources: [{ id: 'S001', version: 1, quote: 'A 导致 B' }] } }]);
+  const w = world(e, {
+    claude: ['# 甲 MARK-A\n\n## 一\nC001 的说法。\n\n## 二\n这里提到 C999。\n\n## 三\n又说 C1000。\n'],
+    codex: ['# 乙 MARK-B\n\n## 开场\n人口见 C002。\n'],
+    'deepseek-pro': ONE_REVIEW,
+  });
+  const c = w.competitions;
+  assert.throws(() => c.create(P, { type: 'outline', title: '题目', participants: ['claude', 'codex'], inputs: [{ id: 'C001', version: 2 }, { id: 'OL001', version: 1 }] }, HUMAN), (err) => err.status === 409 && /C001 有两个版本/.test(err.message));
+  assert.equal(c.list(P).length, 0);
+  assert.equal(e.board.list(P).filter((t) => t.competition).length, 0);
+  const { A, B } = await toSelecting(w, [{ id: 'C001', version: 2 }, { id: 'C002', version: 1 }]);
+  await assert.rejects(c.select(P, 'K001', { label: A, reason: '好' }, HUMAN), (err) => err.status === 409 && /C999、C1000/.test(err.message));
+  assert.deepEqual(outlines(e), ['OL001']);
+  assert.equal(c.view(P, 'K001').stage, 'selecting');
+  await c.select(P, 'K001', { label: B, reason: '没有对不上的编号' }, HUMAN);
+  assert.deepEqual(rec(e, 'OL002').claims, [{ id: 'C002', version: 1 }]);
+  await assert.rejects(c.propose(P, 'K001', { from: { draft: A, section: 2 }, to: { section: 1, position: 'after' } }, HUMAN), (err) => err.status === 400 && /C999/.test(err.message));
+  await c.propose(P, 'K001', { from: { draft: A, section: 1 }, to: { section: 1, position: 'after' } }, HUMAN);
+  await c.decide(P, 'K001', 'P1', { decision: 'accept' }, HUMAN);
+  await c.apply(P, 'K001', HUMAN);
+  assert.deepEqual(rec(e, 'OL002').claims, [{ id: 'C002', version: 1 }, { id: 'C001', version: 2 }]);
+});
+
+test('评审 R2：选定已晋升、竞争记录却没写成时，下一次读取按提交结果补齐；换选不会写出第二份底稿', async () => {
+  const e = await env();
+  await sample(e);
+  const w = world(e, { claude: [DRAFT_A], codex: [DRAFT_B], 'deepseek-pro': REVIEW });
+  const c = w.competitions;
+  const { A, B } = await toSelecting(w, [{ id: 'C001', version: 1 }]);
+  const restore = failNthSave(e, 2); // 第 1 次写“先记下”，第 2 次是晋升后的补记
+  try {
+    await assert.rejects(c.select(P, 'K001', { label: A, reason: '先选甲' }, HUMAN), /注入/);
+  } finally {
+    restore();
+  }
+  assert.deepEqual(outlines(e), ['OL001']); // 正式区已经有了
+  const v = c.view(P, 'K001'); // 读取时补齐
+  assert.deepEqual([v.stage, v.selection.label, v.selection.record, v.pending], ['patching', A, { id: 'OL001', version: 1 }, undefined]);
+  await assert.rejects(c.select(P, 'K001', { label: B, reason: '换选' }, HUMAN), (err) => err.status === 409);
+  assert.deepEqual(outlines(e), ['OL001']);
+  assert.deepEqual(c.view(P, 'K001').history.filter((h) => h.action === 'select').map((h) => h.label), [A]);
+});
+
+test('评审 R2：书记已晋升、竞争记录却没写成时，下一次读取补齐；自己的提交不算竞争之外的改动，结束时不会把已应用的补丁标成没应用', async () => {
+  const e = await env();
+  await sample(e);
+  const w = world(e, { claude: [DRAFT_A], codex: [DRAFT_B], 'deepseek-pro': REVIEW });
+  const c = w.competitions;
+  const { A, B } = await toSelecting(w, [{ id: 'C001', version: 1 }]);
+  await c.select(P, 'K001', { label: A, reason: '好' }, HUMAN);
+  await c.propose(P, 'K001', { from: { draft: B, section: 2 }, to: { section: 2, position: 'after' } }, HUMAN);
+  await c.decide(P, 'K001', 'P1', { decision: 'accept' }, HUMAN);
+  const restore = failNthSave(e, 2);
+  try {
+    await assert.rejects(c.apply(P, 'K001', HUMAN), /注入/);
+  } finally {
+    restore();
+  }
+  assert.equal(rec(e, 'OL001').version, 2);
+  let v = c.view(P, 'K001');
+  assert.deepEqual([v.applied.version, v.patches[0].applied?.version, v.record.diverged], [2, 2, false]);
+  // 继续提补丁、应用：在第 2 版上接着写，不会把自己的提交当成外部改动
+  await c.propose(P, 'K001', { from: { draft: B, section: 3 }, to: { section: 3, position: 'after' } }, HUMAN);
+  await c.decide(P, 'K001', 'P2', { decision: 'accept' }, HUMAN);
+  await c.apply(P, 'K001', HUMAN);
+  assert.equal(rec(e, 'OL001').version, 3);
+  v = await c.close(P, 'K001', HUMAN);
+  assert.deepEqual([v.stage, v.minority.skipped_patches], ['closed', []]);
+  assert.deepEqual(v.patches.map((p) => p.applied?.version), [2, 3]);
+});
+
+test('评审 R2：收了稿却确认不了晋升结果时，只允许原样重试；竞争的候选稿不能从候选稿接口晋升；重启后按提交日志补齐', async () => {
+  const e = await env();
+  await sample(e);
+  const w = world(e, { claude: [DRAFT_A], codex: [DRAFT_B], 'deepseek-pro': REVIEW });
+  const c = w.competitions;
+  const { A, B } = await toSelecting(w, [{ id: 'C001', version: 1 }]);
+  const promote = e.gw.promote;
+  e.gw.promote = async () => {
+    throw Object.assign(new Error('注入：晋升之前中断'), { status: 503 });
+  };
+  try {
+    await assert.rejects(c.select(P, 'K001', { label: A, reason: '好' }, HUMAN), /注入/);
+  } finally {
+    e.gw.promote = promote;
+  }
+  let v = c.view(P, 'K001');
+  assert.deepEqual([v.stage, v.pending?.action], ['selecting', 'select']);
+  assert.ok(c.inbox(P).some((i) => i.action === 'pending'));
+  await assert.rejects(c.select(P, 'K001', { label: B, reason: '换选' }, HUMAN), (err) => err.status === 409 && /还没确认/.test(err.message));
+  await assert.rejects(c.review(P, 'K001', { reviewers: ['gemini'] }, HUMAN), (err) => err.status === 409 && /还没确认/.test(err.message));
+  // 候选稿页面不能替竞争晋升
+  const cand = e.gw.candidates(P).find((x) => x.owner === 'competition:K001');
+  await assert.rejects(e.gw.promote(P, cand.sid), (err) => err.status === 409 && /只能由它的流程晋升/.test(err.message));
+  assert.deepEqual(outlines(e), []);
+  // 模拟重启后恢复：新的竞争实例；提交入口把这份候选稿晋升了，读取时按提交日志补齐
+  const w2 = world(e, {});
+  assert.equal(w2.competitions.view(P, 'K001').pending.action, 'select');
+  await e.gw.promote(P, cand.sid, { owner: 'competition:K001' });
+  v = w2.competitions.view(P, 'K001');
+  assert.deepEqual([v.stage, v.selection.label, v.pending], ['patching', A, undefined]);
+  assert.deepEqual(outlines(e), ['OL001']);
+});
+
+test('评审 R3：分工的范围检查覆盖异议指针里的来源：指向别的部分的来源（quote、fetch_failure）被拒，指向自己那份的来源照常写入', async () => {
+  const e = await env();
+  await sample(e); // S001、C001
+  await asHost(e, [{ kind: 'source', expected_version: 0, data: { title: '别的书', url: 'https://example.org/other', text: '别的书写着 OUTSIDE 1200。' } }]); // S002
+  const objection = (pointer) => json([{ kind: 'objection', expected_version: 0, data: { target: { id: 'C001', version: 1 }, category: 'number_error', pointer, reason: '对照', state: 'open' } }]);
+  const w = world(e, {
+    claude: [
+      objection({ type: 'quote', source: { id: 'S002', version: 1 }, quote: 'OUTSIDE 1200' }),
+      objection({ type: 'fetch_failure', source: { id: 'S002' }, attempt: 'A0001' }),
+      objection({ type: 'quote', source: { id: 'S001', version: 1 }, quote: '当地人口为 1200 人' }),
+    ],
+    codex: ['（没有发现问题）'],
+  });
+  const r = w.divisions.create(P, { type: 'check_citations', inputs: [{ id: 'C001', version: 1 }, { id: 'S002', version: 1 }], participants: ['claude', 'codex'] }, HUMAN);
+  const t = r.parts[0].task;
+  await w.runner.idle();
+  assert.match(e.board.get(P, t).history.at(-1).reason, /out_of_scope/);
+  w.runner.dispatch(P, t, 'claude');
+  await w.runner.idle();
+  assert.match(e.board.get(P, t).history.at(-1).reason, /out_of_scope/);
+  assert.deepEqual(e.gw.listRecords(P, 'objection'), []);
+  w.runner.dispatch(P, t, 'claude');
+  await w.runner.idle();
+  assert.equal(e.board.get(P, t).state, 'done');
+  assert.deepEqual(rec(e, 'O001').pointer.source, { id: 'S001', version: 1 });
+});
+
+test('评审 R4：分工的条目整份作为任务输入、不塞进 goal：长清单完整进提示词和任务包；目标过长、条目过多时一个任务都不建', async () => {
+  const e = await env();
+  const items = Array.from({ length: 12 }, (_, i) => `ITEM-${String(i + 1).padStart(2, '0')}：${'资料'.repeat(240)}`);
+  const w = world(e, { claude: [json([{ kind: 'source', expected_version: 0, data: { title: '一个来源', url: 'https://example.org/one' } }])] });
+  const goal = '目标'.repeat(1500);
+  const r = w.divisions.create(P, { type: 'collect_sources', title: '找资料', goal, items, participants: ['claude'] }, HUMAN);
+  await w.runner.idle();
+  const t = e.board.get(P, r.parts[0].task);
+  assert.equal(t.state, 'done');
+  assert.ok(t.goal.length <= 4000 && t.goal.includes(goal), '用户目标完整，没有被截断');
+  const prompt = w.prompts[0].prompt;
+  for (const it of items) assert.ok(prompt.includes(it), `提示词里少了 ${it.slice(0, 7)}`);
+  const restored = restorePacket(e.workbench.get(P).dir, `${t.id}-a1`);
+  for (const it of items) assert.ok(restored.inputs.some((i) => i.text.includes(it)), `任务包里少了 ${it.slice(0, 7)}`);
+  assert.deepEqual(w.divisions.list(P)[0].parts[0].items.length, 12);
+  const before = e.board.list(P).length;
+  assert.throws(() => w.divisions.create(P, { type: 'collect_sources', goal: 'x'.repeat(3001), items: ['a'], participants: ['claude'] }, HUMAN), /goal 超过 3000 字/);
+  assert.throws(() => w.divisions.create(P, { type: 'collect_sources', items: Array.from({ length: 501 }, (_, i) => `条目${i}`), participants: ['claude'] }, HUMAN), /条目最多 500 项/);
+  assert.equal(e.board.list(P).length, before);
+});
+
+test('评审 R5：方案份数不能超过匿名评审的六个标签：配置写 7 份直接报错、不建任务；6 份时每份各有一个标签并能完成评审', async () => {
+  const e = await env();
+  const six = Array.from({ length: 6 }, (_, i) => ({ id: `d${i + 1}`, name: `D${i + 1}`, adapter: 'generic', model: `fake-${i + 1}`, resolved: 'x' }));
+  const people = [...six, PEOPLE.find((p) => p.id === 'deepseek-pro')];
+  const protocol = path.join(e.workbench.get(P).dir, 'protocol.json');
+  fs.writeFileSync(protocol, JSON.stringify({ compete: { drafts: 7 } }));
+  const script = Object.fromEntries(six.map((p, i) => [p.id, [`# 方案 MARK-${i}\n\n## 一\n第 ${i} 份。\n`]]));
+  script['deepseek-pro'] = '方案己 第 1 节：最后一份也能指到。';
+  const w = world(e, script, { people });
+  const c = w.competitions;
+  assert.throws(() => c.create(P, { type: 'outline', title: '七份', participants: [...six.map((p) => p.id), 'deepseek-pro'] }, HUMAN), /compete.drafts 必须是 2 到 6 之间的整数/);
+  fs.writeFileSync(protocol, JSON.stringify({ compete: { drafts: 6 } }));
+  assert.equal(e.board.list(P).length, 0);
+  assert.equal(w.prompts.length, 0);
+  c.create(P, { type: 'outline', title: '六份', participants: six.map((p) => p.id) }, HUMAN);
+  await w.runner.idle();
+  c.reveal(P, 'K001');
+  await c.review(P, 'K001', { reviewers: ['deepseek-pro'] }, HUMAN);
+  await w.runner.idle();
+  c.reveal(P, 'K001');
+  const v = c.view(P, 'K001');
+  assert.deepEqual(v.label_drafts.map((l) => l.label), LABELS);
+  assert.equal(new Set(v.label_drafts.map((l) => l.task)).size, 6);
+  assert.deepEqual(v.reviews[0].comments.map((x) => x.where), ['方案己 第 1 节']);
+});
+
+test('评审 R6：论断编号按完整编号匹配：C100 不会被当成 C1000 的一部分，两侧紧挨字母或数字的不算', () => {
+  const exists = (id) => ['C100', 'C1000', 'C999', 'C9999', 'C200'].includes(id);
+  const review = (text, draft) => parseReview(text, { drafts: { 方案甲: draft }, claimExists: exists });
+  assert.deepEqual(review('方案甲 C100：要核对', '只用了 C1000').returned.map((r) => r.reason), ['方案甲里没有提到 C100']);
+  assert.equal(review('方案甲 C1000：要核对', '只用了 C1000').comments.length, 1);
+  assert.equal(review('方案甲 C999：要核对', '见 C9999、XC999 与 C999a').comments.length, 0);
+  assert.equal(review('方案甲 C999：要核对', '见 C999。').comments.length, 1);
+  assert.equal(review(json([{ draft: '方案甲', claim: 'C100', comment: '要核对' }]), '只用了 C1000').comments.length, 0);
+  assert.deepEqual(claimIdsIn('C100、C1000，XC100，C12345a，（C200）C200'), ['C100', 'C1000', 'C200']);
 });
