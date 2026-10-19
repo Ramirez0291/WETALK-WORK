@@ -532,3 +532,68 @@ test('评审 R7：异议状态接口用同一 request_id 原样重试，返回�
   await assert.rejects(call({ ...body, state: 'upheld' }), (err) => err.status === 409);
   assert.equal(rec(e, 'O001').version, 2);
 });
+
+// ---------- WP5a 第二轮复审（Astra，R1–R2）----------
+
+test('复审 R1：同一参与者换厂商的模型改写后，两次贡献的厂商都留在作者集合里；两个厂商的其他参与者都不能核验或裁定，第三厂商可以', async () => {
+  const W1 = agent('writer', 'generic', 'deepseek-fixture');
+  const W2 = agent('writer', 'generic', 'gpt-6-fixture');
+  const e = await env();
+  await as(e, HUMAN, [{ kind: 'source', expected_version: 0, data: { title: '某书', url: 'https://example.org/book', text: TEXT } }]);
+  await as(e, W1, [{ kind: 'claim', expected_version: 0, data: { type: 'fact', text: 'A 导致 B', sources: [{ id: 'S001', version: 1, quote: 'A 导致 B' }] } }]);
+  await as(e, W2, [{ id: 'C001', expected_version: 1, data: { type: 'fact', text: 'A 导致 B。', sources: [{ id: 'S001', version: 1, quote: 'A 导致 B' }] } }]);
+  assert.deepEqual(rec(e, 'C001').authors.map((a) => `${a.participant}/${a.vendor}`), ['writer/deepseek', 'writer/openai']);
+  const v2 = verification('supported', { target: { id: 'C001', version: 2 } });
+  await rejected(as(e, CX, [v2]), 'same_vendor'); // 后一次贡献的厂商
+  await rejected(as(e, DS2, [v2]), 'same_vendor'); // 前一次贡献的厂商
+  await as(e, CL, [objection({ target: { id: 'C001', version: 2 }, category: 'quote_unsupported', pointer: quotePtr('没有证据表明 A 导致 B') })]);
+  await rejected(as(e, CX, [move(rec(e, 'O001'), 'rejected', { resolution: '不成立' })]), 'judge_same_vendor');
+  await as(e, CL, [v2]);
+  assert.equal(status(e, 'C001').verification.enough, true);
+  // 派发同样拒绝两个厂商
+  const { runner } = withRunner(e, []);
+  const t = e.board.create(P, { type: 'verify_claim', inputs: [{ id: 'C001', version: 2 }] }, { created_by: HUMAN });
+  assert.throws(() => runner.dispatch(P, t.id, 'codex'), (err) => err.status === 409 && /writer\/openai/.test(err.message));
+  assert.throws(() => runner.dispatch(P, t.id, 'deepseek-pro'), (err) => err.status === 409);
+});
+
+test('复审 R1：厂商从推断不出变为能推断，旧的“推断不出”仍保留（保守）：Agent 的核验不计入，主持人的计入', async () => {
+  const W0 = agent('writer', 'generic'); // 没有模型：推断不出
+  const W2 = agent('writer', 'generic', 'gpt-6-fixture');
+  const e = await env();
+  await as(e, HUMAN, [{ kind: 'source', expected_version: 0, data: { title: '某书', url: 'https://example.org/book', text: TEXT } }]);
+  await as(e, W0, [{ kind: 'claim', expected_version: 0, data: { type: 'fact', text: 'A 导致 B', sources: [{ id: 'S001', version: 1, quote: 'A 导致 B' }] } }]);
+  await as(e, W2, [{ id: 'C001', expected_version: 1, data: { type: 'fact', text: 'A 导致 B。', sources: [{ id: 'S001', version: 1, quote: 'A 导致 B' }] } }]);
+  assert.deepEqual(rec(e, 'C001').authors.map((a) => a.vendor), ['unknown', 'openai']);
+  await as(e, CL, [verification('supported', { target: { id: 'C001', version: 2 } })]);
+  assert.deepEqual(status(e, 'C001').verification.uncounted.map((u) => u.reason), ['author_vendor_unknown']);
+  await as(e, HUMAN, [verification('supported', { target: { id: 'C001', version: 2 } })]);
+  assert.equal(status(e, 'C001').verification.enough, true);
+});
+
+test('复审 R2：匿名评审实际发送的提示词里没有内容生产者的身份（主持人、已不在名单里的旧参与者、多位作者、报告的模型）；服务端记录照样可追溯', async () => {
+  const OLD = agent('old-writer', 'generic', 'gpt-6-fixture'); // 不在当前参与者名单里
+  const e = await env();
+  await as(e, OLD, [{ kind: 'outline', expected_version: 0, data: { title: '大纲', body: '第一节：问题。第二节：做法。' } }]);
+  await as(e, HUMAN, [{ id: 'OL001', expected_version: 1, data: { title: '大纲', body: '第一节：问题。第二节：做法与边界。' } }]);
+  assert.deepEqual(rec(e, 'OL001').authors.map((a) => a.participant), ['old-writer', '主持人']);
+  const { runner, prompts } = withRunner(e, ['方案甲 第 2 节：边界写得太含糊。']);
+  const t = e.board.create(P, { type: 'anonymous_review', inputs: [{ id: 'OL001', version: 2 }] }, { created_by: HUMAN });
+  runner.dispatch(P, t.id, 'claude');
+  await runner.idle();
+  assert.equal(e.board.get(P, t.id).state, 'submitted');
+  const sent = prompts[0].prompt;
+  assert.match(sent, /做法与边界/); // 内容在
+  for (const leak of ['主持人', 'old-writer', 'gpt-6-fixture', 'openai', '"human"', '"authors"', '"provenance"', 'verified']) assert.ok(!sent.includes(leak), `提示词里不该出现：${leak}`);
+});
+
+test('复审 R2：核验与补证任务的输入里也不带论断作者、核验者、异议提出者的身份', async () => {
+  const e = await env();
+  await sample(e);
+  await as(e, CL, [objection({ category: 'number_error', pointer: { type: 'location', locator: '人口' }, state: 'needs_evidence' })]);
+  const [act] = await e.flow.reconcile(P);
+  const inputs = collectInputs({ gateway: e.gw, project: P, task: e.board.get(P, act.task), visibility: 'read' });
+  const all = inputs.map((i) => i.text).join('\n');
+  for (const leak of ['"raised_by"', '"authors"', '"provenance"', 'deepseek-flash']) assert.ok(!all.includes(leak), `任务输入里不该出现：${leak}`);
+  assert.ok(all.includes('某书'), '来源卡的书目信息保留');
+});
