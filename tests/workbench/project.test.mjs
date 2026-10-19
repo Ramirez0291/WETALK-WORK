@@ -20,7 +20,7 @@ function tmpProjects() {
   return path.join(base, '项目资料');
 }
 after(() => {
-  for (const base of created) fs.rmSync(base, { recursive: true, force: true });
+  for (const base of created) fs.rmSync(base, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }); // Windows 上文件可能还被短暂占用：退避重试
 });
 
 const gitAvailable = (await git(os.tmpdir(), ['--version'])).ok;

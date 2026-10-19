@@ -18,10 +18,11 @@ import { createCompetitions } from './lib/workbench/compete.mjs';
 import { createDivisions } from './lib/workbench/divide.mjs';
 import { phaseSpace } from './lib/workbench/phases.mjs';
 import { createScheduler } from './lib/workbench/scheduler.mjs';
+import { createExports } from './lib/workbench/exports.mjs';
 import { cleanConventions } from './lib/workbench/packets.mjs';
 import { RULES, tally, decideOutcome, buildVotePrompt, parseVote, buildDraftPrompt, parseDraft, resultText } from './lib/voting.mjs';
 import { createWorkbench, loadDefaults } from './lib/workbench/project.mjs';
-import { workbenchRoutes, inboxItems } from './lib/workbench/http.mjs';
+import { workbenchRoutes, inboxItems, FILE_RESPONSE } from './lib/workbench/http.mjs';
 import { createCommitGateway } from './lib/workbench/commit.mjs';
 import crypto from 'node:crypto';
 
@@ -52,11 +53,14 @@ const clients = new Set();
 // 契约一的规则（补证任务、来源 gone 时的异议）：提交完成、补证任务结束时触发一次。flow 在下面建好后才接上
 let flow = null;
 let scheduler = null; // WP6：调度，下面建好后接上
+let exportsSvc = null; // WP7：导出，下面建好后接上
 const wbEvent = (ev) => {
   broadcast({ ...ev, type: `wb-${ev.type}` }); // 工坊事件里从不带正文
   if (ev.type === 'commit' || (ev.type === 'task' && ['done', 'failed', 'cancelled'].includes(ev.state))) flow?.poke(ev.project);
   // 调度（WP6）：任务离开“进行中”时看一眼这一轮能不能收、要不要开下一轮
   if (ev.type === 'task' && !['claimed', 'proposed'].includes(ev.state)) scheduler?.poke(ev.project);
+  // 导出（WP7）：Agent 的版式方案交来了，照方案生成 PPTX
+  if (ev.type === 'task' && ev.state === 'done') exportsSvc?.onTaskDone(ev.project, ev.id).catch((e) => console.error(`[工坊] 按版式方案生成失败（${ev.project} ${ev.id}）：${e.message}`));
 };
 // 任务看板（契约三）：任务状态只由它改变；它同时是提交入口的栅栏
 const board = createTaskBoard({ workbench, usage, onEvent: wbEvent });
@@ -102,6 +106,8 @@ scheduler = createScheduler({
   inboxCount: (p) => inboxCountOf?.(p) ?? 0,
   onEvent: wbEvent,
 });
+// 导出（WP7）：Markdown / PPTX，结构检查、读回核对、渲染检查；导出结果是正式记录 EX###
+exportsSvc = createExports({ workbench, gateway, board, runner, participants: participantById, root: ROOT, onEvent: wbEvent });
 const inboxCountOf = (p) => inboxItems({ gateway, board, usage, competitions, scheduler }, p).length; // 待你决定的条数，交接单里用
 // 任务的重启恢复：服务自己发起的调用已不存在，这些尝试释放；已交稿但没来得及晋升的，补一次晋升
 for (const { name } of workbench.list()) {
@@ -1244,7 +1250,7 @@ const routes = [
   }],
 
   ...workbenchRoutes({
-    workbench, gateway, web, usage, board, runner, sealed, flow, competitions, divisions, scheduler, readJson, hostToken: HOST_TOKEN, humanName: config.humanName,
+    workbench, gateway, web, usage, board, runner, sealed, flow, competitions, divisions, scheduler, exports: exportsSvc, readJson, hostToken: HOST_TOKEN, humanName: config.humanName,
     participantByName: (name) => findParticipant(name),
     participants: () => participants,
   }),
@@ -1282,7 +1288,15 @@ const server = http.createServer(async (req, res) => {
 
     for (const [method, re, handler] of routes) {
       const m = url.pathname.match(re);
-      if (m && req.method === method) return send(res, 200, await handler(req, m));
+      if (!m || req.method !== method) continue;
+      const out = await handler(req, m);
+      if (out?.[FILE_RESPONSE]) {
+        // 导出的文件：PPTX、Markdown 作为附件下载，图片和 PDF 直接显示
+        const inline = /^(image\/|application\/pdf)/.test(out.type);
+        res.writeHead(200, { 'Content-Type': out.type, 'Cache-Control': 'no-store', 'Content-Disposition': `${inline ? 'inline' : 'attachment'}; filename*=UTF-8''${encodeURIComponent(out.filename)}` });
+        return fs.createReadStream(out.path).pipe(res);
+      }
+      return send(res, 200, out);
     }
     throw new HttpError(404, '没有这个接口');
   } catch (e) {

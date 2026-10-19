@@ -32,6 +32,7 @@
     <button data-tab="schedule">调度</button>
     <button data-tab="divide">分工</button>
     <button data-tab="compete">竞争</button>
+    <button data-tab="export">导出</button>
     <button data-tab="records">记录</button>
     <button data-tab="trace">追溯</button>
     <button data-tab="talk">研讨</button>
@@ -54,6 +55,7 @@
           <option value="slide">幻灯片</option>
           <option value="verification">核验记录</option>
           <option value="objection">异议</option>
+          <option value="export">导出</option>
         </select>
       </div>
       <div id="recordList"></div>
@@ -141,6 +143,25 @@
       </form>
       <div id="competitionList"></div>
       <div id="competitionDetail" class="detail" hidden></div>
+    </section>
+
+    <section id="tab-export" hidden>
+      <form id="newExport" class="panel">
+        <h4>导出</h4>
+        <p class="hint">把幻灯片（slides/）导出为 Markdown 和 PPTX。正文每个句子要带论断编号（例如 C001），或标为〔非事实〕；导出时编号从页面上去掉，PPTX 里挪进讲者备注，Markdown 里写成脚注。每次导出写成一条导出记录（EX###），文件随 git 留档；幻灯片改版后，这份导出变成“待更新”。</p>
+        <div class="tools">
+          <label><input type="checkbox" id="exMd" checked> Markdown</label>
+          <label><input type="checkbox" id="exPptx" checked> PPTX</label>
+          <select id="exVia"></select>
+          <select id="exTemplate"></select>
+          <select id="exSkill"></select>
+          <button class="primary">导出</button>
+        </div>
+        <p class="hint">交给 Agent 时，它不拿工具，只按幻灯片、模板的版式清单和 skill 回一份版式方案；PPTX 仍由脚本生成，检查也一样。模板放在 templates/pptx/，skill 放在 templates/skills/，换模板或 skill 不用改代码。</p>
+      </form>
+      <div id="exportTasks"></div>
+      <div id="exportList"></div>
+      <div id="exportDetail" class="detail" hidden></div>
     </section>
 
     <section id="tab-talk" hidden>

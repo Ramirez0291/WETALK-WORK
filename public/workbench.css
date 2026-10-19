@@ -102,6 +102,12 @@ mark { background: var(--mark); color: inherit; }
 .panel input { max-width: 100%; }
 /* WP5b：分工、竞争、研讨 */
 .wide { width: 100%; }
+/* 导出：逐页的渲染图 */
+.pages { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 8px; }
+.pages figure { margin: 0; width: 260px; }
+.pages img { width: 100%; border: 1px solid var(--border); border-radius: 4px; background: #fff; }
+.pages figcaption { font-size: 12px; margin-top: 2px; }
+.pages ul { margin: 4px 0 0; padding-left: 18px; font-size: 12px; }
 .steps { display: flex; flex-wrap: wrap; gap: 4px; margin: 6px 0 10px; }
 .steps span { padding: 2px 9px; border-radius: 9px; border: 1px solid var(--border); color: var(--muted); font-size: 12px; }
 .steps span.on { border-color: var(--accent); color: var(--accent); font-weight: 600; }

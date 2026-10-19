@@ -7,7 +7,7 @@ const TOKEN = document.querySelector('meta[name="wb-host-token"]').content;
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
 // [文字, 样式] 形式的徽章查表：和 localized 一样在取用时翻译文字
 const localizedBadges = (table) => new Proxy(table, { get: (o, k) => (Object.hasOwn(o, k) ? [ui(o[k][0]), o[k][1]] : o[k]) });
-const KIND = localized({ source: '来源卡', claim: '论断', verification: '核验', objection: '异议', outline: '大纲', script: '讲稿', slide: '幻灯片' });
+const KIND = localized({ source: '来源卡', claim: '论断', verification: '核验', objection: '异议', outline: '大纲', script: '讲稿', slide: '幻灯片', export: '导出' });
 const VER = localizedBadges({ unreviewed: ['未核验', 'b-muted'], supported: ['支持', 'b-ok'], disputed: ['有分歧', 'b-warn'], unsupported: ['不支持', 'b-bad'] });
 const ARCHIVE = localizedBadges({ archived: ['已留档', 'b-ok'], pending: ['待留档', 'b-warn'], failed: ['留档失败，待重试', 'b-bad'], skipped: ['不留档', 'b-muted'] });
 const badge = (text, cls) => `<span class="badge ${cls}">${esc(text)}</span>`;
@@ -151,7 +151,7 @@ const TASK_STATE = localizedBadges({
   proposed: ['已提出', 'b-muted'], open: ['可认领', 'b-warn'], claimed: ['进行中', 'b-warn'], submitted: ['已交稿', 'b-warn'],
   done: ['完成', 'b-ok'], failed: ['失败', 'b-bad'], cancelled: ['已取消', 'b-muted'], needs_user: ['待你决定', 'b-bad'],
 });
-const VIS = localized({ sealed: '密封起草', review: '匿名评审', audience: '观众型读者', read: '读资料', export: '导出' });
+const VIS = localized({ sealed: '密封起草', review: '匿名评审', audience: '观众型读者', read: '读资料', export: '导出版式' });
 let people = [];
 
 const VIEWS = {
@@ -398,6 +398,33 @@ const VIEWS = {
           <td class="hint">${time(k.updated_at)}</td></tr>`).join('')}</table></div>`
       : ui('<p class="hint">还没有竞争。</p>');
     for (const tr of document.querySelectorAll('#competitionList tr.click')) tr.onclick = () => showCompetition(tr.dataset.k).catch(fail);
+  },
+
+  // ---------- 导出（WP7） ----------
+  async export() {
+    const [r] = await Promise.all([api('GET', P('/exports')), loadPeople()]);
+    const fill = (sel, items, blank) => {
+      const keep = sel.value;
+      sel.innerHTML = (blank ? `<option value="">${esc(blank)}</option>` : '') + items.map(([v, label]) => `<option value="${esc(v)}">${esc(label)}</option>`).join('');
+      if ([...sel.options].some((o) => o.value === keep)) sel.value = keep;
+    };
+    fill($('#exVia'), [['script', ui('脚本生成')], ...people.map((p) => [p.id, ui`${p.name} 出版式方案`])]);
+    fill($('#exTemplate'), r.templates.pptx.map((n) => [n, ui`模板：${n}`]));
+    fill($('#exSkill'), r.templates.skills.map((n) => [n, ui`skill：${n}`]), ui('不用 skill'));
+    $('#exportTasks').innerHTML = r.tasks.length
+      ? ui`<h4>Agent 的版式方案</h4><ul>${r.tasks.map((t) => ui`<li><code>${esc(t.id)}</code> ${esc(t.assigned_to ?? '')} ${badge(...(TASK_STATE[t.state] ?? [t.state, 'b-muted']))}${['failed', 'needs_user', 'open'].includes(t.state) && t.reason ? ` <span class="hint">${esc(t.reason)}</span>` : ''}${t.failure ? ui` <span class="hint">按方案生成失败：${esc(t.failure.message)}</span> <button type="button" data-exbuild="${esc(t.id)}">再生成一次</button>` : ''}</li>`).join('')}</ul>`
+      : '';
+    const check = (c, none) => (c == null ? badge(none, 'b-muted') : c.ok === true ? badge(ui('通过'), 'b-ok') : c.ok === false ? badge(ui`${c.errors} 个问题`, 'b-bad') : badge(ui('未检查完'), 'b-warn'));
+    $('#exportList').innerHTML = r.exports.length
+      ? ui`<div class="wrap"><table><tr><th>导出</th><th>时间</th><th>页数</th><th>格式</th><th>方式</th><th>结构检查</th><th>读回核对</th><th>渲染检查</th><th>状态</th></tr>
+        ${r.exports.map((x) => `<tr class="click" data-ex="${esc(x.id)}"><td><code>${esc(x.id)}</code> <span class="hint">v${x.version}</span></td><td class="hint">${time(x.at)}</td><td>${x.pages}</td>
+          <td>${esc(x.formats.join(' + '))}</td><td>${esc(x.via === 'script' ? ui('脚本') : x.via)}${x.template ? `<div class="hint">${esc(x.template)}${x.skill ? ` · ${esc(x.skill)}` : ''}</div>` : ''}</td>
+          <td>${check(x.structure, '')}</td><td>${check(x.readback, ui('无 PPTX'))}</td><td>${check(x.render, x.formats.includes('pptx') ? ui('还没做') : ui('无 PPTX'))}</td>
+          <td>${fresh(x)} ${x.deliverable ? badge(ui('可交付'), 'b-ok') : ''}</td></tr>`).join('')}</table></div>`
+      : ui('<p class="hint">还没有导出。</p>');
+    for (const tr of document.querySelectorAll('#exportList tr.click')) tr.onclick = () => showExport(tr.dataset.ex).catch(fail);
+    for (const b of document.querySelectorAll('[data-exbuild]')) b.onclick = () => api('POST', P(`/exports/tasks/${b.dataset.exbuild}/build`), {}).then((x) => toast(ui`已生成 ${x.id}`), fail).then(render);
+    if (openExport && !$('#exportDetail').hidden) await showExport(openExport, { scroll: false });
   },
 
   // ---------- 研讨：这个项目里开的议题 ----------
@@ -747,6 +774,73 @@ $('#newCompetition').onsubmit = async (e) => {
     await showCompetition(r.id);
   } catch (err) {
     fail(err);
+  }
+};
+
+// ---------- 导出详情（WP7） ----------
+
+const ISSUE_LEVEL = localizedBadges({ error: ['问题', 'b-bad'], warn: ['提示', 'b-warn'] });
+const issueList = (issues) => (issues.length ? `<ul>${issues.map((i) => `<li>${badge(...ISSUE_LEVEL[i.level])} ${esc(i.message)}</li>`).join('')}</ul>` : '');
+let openExport = null;
+async function showExport(id, { scroll = true } = {}) {
+  openExport = id;
+  const v = await api('GET', P(`/exports/${id}`));
+  const rec = v.record;
+  const box = $('#exportDetail');
+  box.hidden = false;
+  const file = (name) => P(`/exports/${id}/files/${name}`);
+  const s = rec.structure;
+  const rb = rec.readback;
+  const rd = rec.render;
+  box.innerHTML = ui`<h3>导出 <code>${esc(id)}</code> 第 ${rec.version} 版 ${fresh(v)} ${v.deliverable ? badge(ui('可交付'), 'b-ok') : ''}</h3>
+    <p class="hint">${rec.slides.map((x) => `<code>${esc(x.id)}@${x.version}</code>`).join(' ')}${rec.template ? ui` · 模板 ${esc(rec.template.name)}` : ''}${rec.skill ? ui` · skill ${esc(rec.skill.name)}` : ''}${rec.plan_task ? ui` · 版式方案来自任务 <code>${esc(rec.plan_task.task)}</code>` : ''}</p>
+    <p>${Object.keys(rec.files).map((f) => `<a href="${file(`deck.${f}`)}">${esc(ui`下载 ${f.toUpperCase()}`)}</a>`).join(' · ')}${rd?.pdf ? ` · <a href="${file(`${rd.dir}/${rd.pdf}`)}" target="_blank">PDF</a>` : ''}</p>
+    <h4>结构检查</h4>
+    ${s.ok ? ui('<p class="hint">通过：每个句子都带论断编号或标为非事实，引用的论断都可进入成品，字数与备注都合要求。</p>') : ''}
+    ${s.slides.filter((x) => x.issues.length).map((x) => ui`<p><code>${esc(x.id)}</code> ${esc(x.title)} <span class="hint">${x.chars} 字</span></p>${issueList(x.issues)}`).join('')}
+    ${rb ? ui`<h4>读回核对</h4>${rb.ok ? ui('<p class="hint">通过：页数、标题、正文、备注与每页的标记都对得上。</p>') : issueList(rb.issues)}` : ''}
+    ${rec.files.pptx ? ui`<h4>渲染检查</h4>
+      <p><button type="button" id="exRender" ${v.freshness !== 'current' ? 'disabled' : ''}>${rd ? ui('重新做渲染检查') : ui('做渲染检查')}</button>
+      <span class="hint">用本机 PowerPoint 在后台把 PPTX 转成 PDF 和逐页图片，程序查文字溢出与重叠、字体缺失、图片变形；图表标签要看图确认。逐页的视觉检查在下一步（WP7b）。</span></p>
+      ${rd ? ui`<p class="hint">${esc(rd.engine === 'powerpoint' ? `PowerPoint ${rd.powerpoint ?? ''}` : ui('没有 PowerPoint，只查了字体、图片和图表'))} · ${time(rd.at)} · 用到的字体：${esc(rd.fonts.used.join(ui('、')) || '—')}${rd.fonts.missing.length ? ui` · <b>本机没有：${esc(rd.fonts.missing.join(ui('、')))}</b>` : ''}</p>
+        ${issueList(rd.issues)}
+        <div class="pages">${rd.pages.map((p) => `<figure>${p.png ? `<a href="${file(`${rd.dir}/${p.png}`)}" target="_blank"><img src="${file(`${rd.dir}/${p.png}`)}" alt="p${p.page}" loading="lazy"></a>` : ''}
+          <figcaption>${esc(ui`第 ${p.page} 页`)} ${p.slide ? `<code>${esc(p.slide)}</code>` : ''} ${p.issues.length ? '' : badge(ui('通过'), 'b-ok')}</figcaption>${issueList(p.issues)}</figure>`).join('')}</div>` : ''}` : ''}`;
+  const rbtn = $('#exRender');
+  if (rbtn) rbtn.onclick = async () => {
+    rbtn.disabled = true;
+    rbtn.textContent = ui('渲染检查中……');
+    try {
+      const r = await api('POST', P(`/exports/${id}/render`), {});
+      toast(r.render.ok ? ui('渲染检查通过') : r.render.ok === false ? ui`渲染检查查出 ${r.render.errors} 个问题` : ui('只查了字体、图片和图表（没有 PowerPoint）'));
+      await showExport(id, { scroll: false });
+    } catch (err) {
+      fail(err);
+      rbtn.disabled = false;
+    }
+  };
+  if (scroll) box.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+}
+
+$('#newExport').onsubmit = async (e) => {
+  e.preventDefault();
+  const formats = [['md', '#exMd'], ['pptx', '#exPptx']].filter(([, sel]) => $(sel).checked).map(([f]) => f);
+  const btn = e.target.querySelector('button.primary');
+  btn.disabled = true;
+  try {
+    const r = await api('POST', P('/export'), { formats, via: $('#exVia').value, template: $('#exTemplate').value || null, skill: $('#exSkill').value || null });
+    if (r.export) {
+      toast(ui`已导出 ${r.export.id}`);
+      await VIEWS.export();
+      await showExport(r.export.id);
+    } else {
+      toast(r.dispatch_error ? ui`已建导出任务 ${r.task.id}，派发失败：${r.dispatch_error}` : ui`已派给 ${r.task.assigned_to} 出版式方案（任务 ${r.task.id}），交来后自动生成`);
+      await VIEWS.export();
+    }
+  } catch (err) {
+    fail(err);
+  } finally {
+    btn.disabled = false;
   }
 };
 

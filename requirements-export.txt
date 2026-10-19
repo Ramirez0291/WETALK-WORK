@@ -1,0 +1,5 @@
+# 工坊导出（WP7）用的 Python 依赖，装在仓库自己的 .venv 里（不进 git）：
+#   py -3 -m venv .venv
+#   .venv\Scripts\python.exe -m pip install -r requirements-export.txt
+# python-pptx：套用模板生成 PPTX、读回核对（它会带上 lxml、Pillow、XlsxWriter）
+python-pptx==1.0.2
