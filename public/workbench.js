@@ -816,12 +816,14 @@ function visualPanel(v, rd) {
     ${rd.pages.every((p) => p.image) ? ui`<div class="tools"><select id="exReviewer">${seers.map((p) => `<option value="${esc(p.id)}">${esc(p.name)}</option>`).join('')}</select> <button type="button" id="exReview" ${seers.length && v.freshness === 'current' ? '' : 'disabled'}>派它做视觉初查</button> <span class="hint">${seers.length ? ui('会调用一次模型（每次最多 8 页）') : ui('没有能看图的参与者')}</span></div>` : ui('<p class="hint">这次渲染没有页面截图（没有用 PowerPoint），做不了视觉检查。</p>')}
     ${tasks.length ? `<ul>${tasks.map((t) => `<li><code>${esc(t.id)}</code> ${esc(t.assigned_to ?? '')} ${badge(...(TASK_STATE[t.state] ?? [t.state, 'b-muted']))} <span class="hint">${esc(ui`第 ${t.pages.join(ui('、'))} 页`)}${['failed', 'open', 'needs_user'].includes(t.state) && t.reason ? ` · ${esc(t.reason)}` : ''}</span></li>`).join('')}</ul>` : ''}`;
 }
+// 终审按钮上记下这一页显示的是哪一版导出、哪次渲染、哪张截图
+const seen = (p, v) => `data-reviews="${esc(p.initial?.id ?? '')}" data-version="${v.record.version}" data-render="${esc(v.record.render.dir)}" data-image="${esc(p.image ?? '')}"`;
 function pageReview(p, v) {
   const one = (c) => `${badge(...R_VERDICT[c.verdict])} <span class="hint">${esc(c.by ?? '')}</span>${c.issues.length ? `<ul>${c.issues.map((i) => `<li>${esc(R_KIND[i.kind] ?? i.kind)}：${esc(i.note)}</li>`).join('')}</ul>` : ''}${c.note ? `<div class="hint">${esc(c.note)}</div>` : ''}`;
   return ui`<div class="review">
     <div><b>模型初查</b> ${p.initial ? one(p.initial) : ui('<span class="hint">还没有</span>')}</div>
     <div><b>你的终审</b> ${p.final ? one(p.final) : ui('<span class="hint">还没有</span>')}</div>
-    ${v.freshness === 'current' ? ui`<div class="tools"><input data-note="${p.page}" placeholder="终审说明（不通过时必填）" size="18"> <button type="button" data-final="pass" data-page="${p.page}" data-reviews="${esc(p.initial?.id ?? '')}">通过</button> <button type="button" data-final="fail" data-page="${p.page}" data-reviews="${esc(p.initial?.id ?? '')}">不通过</button></div>` : ''}
+    ${v.freshness === 'current' ? ui`<div class="tools"><input data-note="${p.page}" placeholder="终审说明（不通过时必填）" size="18"> <button type="button" data-final="pass" data-page="${p.page}" ${seen(p, v)}>通过</button> <button type="button" data-final="fail" data-page="${p.page}" ${seen(p, v)}>不通过</button></div>` : ''}
   </div>`;
 }
 async function showExport(id, { scroll = true } = {}) {
@@ -857,10 +859,12 @@ async function showExport(id, { scroll = true } = {}) {
     const note = box.querySelector(`[data-note="${page}"]`).value.trim();
     if (b.dataset.final === 'fail' && !note) return toast(ui('判为不通过时，写一句问题在哪里'), true);
     try {
-      await api('POST', P(`/exports/${id}/pages/${page}/review`), { verdict: b.dataset.final, ...(note ? { note } : {}), ...(b.dataset.reviews ? { reviews: b.dataset.reviews } : {}) });
+      // 带上这一页显示的导出版本、渲染与截图：期间重新渲染过，服务端会拒绝，刷新后再审
+      await api('POST', P(`/exports/${id}/pages/${page}/review`), { version: Number(b.dataset.version), render: b.dataset.render, image: b.dataset.image || null, verdict: b.dataset.final, ...(note ? { note } : {}), ...(b.dataset.reviews ? { reviews: b.dataset.reviews } : {}) });
       await showExport(id, { scroll: false });
     } catch (err) {
       fail(err);
+      await showExport(id, { scroll: false }); // 期间重新渲染过：换成最新的截图
     }
   };
   const ask = box.querySelector('#exReview');

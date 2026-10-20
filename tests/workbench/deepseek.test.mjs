@@ -422,7 +422,9 @@ test('R3: 账户限速按每次物理请求执行：并发首发与重试交错�
     await mock2.close();
   }
   assert.equal(starts.length, 10);
-  for (let i = 5; i < starts.length; i++) assert.ok(starts[i] - starts[i - 5] >= 990, `第 ${i + 1} 次与第 ${i - 4} 次相隔 ${starts[i] - starts[i - 5]}ms`);
+  // 限速按发出的时间排，这里量的是模拟服务收到的时间：各次请求的本机往返有十几毫秒的抖动（WP7b 评审时一次量到 986ms），
+  // 留 50ms 容差。限速失效时相隔会接近 0，仍然查得出
+  for (let i = 5; i < starts.length; i++) assert.ok(starts[i] - starts[i - 5] >= 950, `第 ${i + 1} 次与第 ${i - 4} 次相隔 ${starts[i] - starts[i - 5]}ms`);
 });
 
 test('R3: 等待限速名额同样受总时限和“停止”约束', async () => {

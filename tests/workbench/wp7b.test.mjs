@@ -102,6 +102,9 @@ function world(e, { script = {} } = {}) {
 }
 
 const pass = (pages) => json({ pages: pages.map((page) => ({ page, verdict: 'pass', issues: [] })) });
+// 你看到的那一版导出、那次渲染、那一页的截图（终审请求要带上）
+const seenOf = (v, page) => ({ version: v.record.version, render: v.record.render.dir, image: v.visual_pages[page - 1].image });
+const approve = async (w, id, page, body = {}) => w.exports.finalReview(P, id, page, { verdict: 'pass', ...seenOf(w.exports.view(P, id), page), ...body }, HUMAN);
 async function promoteFails(e, changes, actor = HUMAN) {
   const r = e.gw.receive(P, { request_id: rid(), changes }, { actor });
   return e.gw.promote(P, r.sid).then(() => null, (err) => err.details?.reasons ?? err);
@@ -157,10 +160,10 @@ test('视觉检查：派能看图的参与者初查（截图按页附上、内�
   assert.deepEqual([v.visual.initial, v.visual.reviewed, v.deliverable], [2, 0, false]);
   assert.deepEqual(v.visual_pages[1].initial.issues, [{ kind: 'overflow', note: '最后一行被截断' }]);
   // 主持人终审：第 1 页通过；第 2 页先判不通过，再改判通过（另写一条，取最新的）
-  v = await w.exports.finalReview(P, 'EX001', 1, { verdict: 'pass', reviews: 'RC001' }, HUMAN);
-  v = await w.exports.finalReview(P, 'EX001', 2, { verdict: 'fail', issues: [{ kind: 'overflow', note: '确实截断了' }], reviews: 'RC002' }, HUMAN);
+  v = await approve(w, 'EX001', 1, { reviews: 'RC001' });
+  v = await approve(w, 'EX001', 2, { verdict: 'fail', issues: [{ kind: 'overflow', note: '确实截断了' }], reviews: 'RC002' });
   assert.deepEqual([v.visual.reviewed, v.visual.passed, v.deliverable], [2, 1, false]);
-  v = await w.exports.finalReview(P, 'EX001', 2, { verdict: 'pass', note: '放大看是行距，不是截断' }, HUMAN);
+  v = await approve(w, 'EX001', 2, { note: '放大看是行距，不是截断' }); // 对同一张截图改判
   assert.deepEqual([v.visual.passed, v.visual.ok, v.deliverable], [2, true, true]);
   assert.equal(v.visual_pages[1].final.note, '放大看是行距，不是截断');
   // 截图随记录进 git 留档
@@ -213,7 +216,7 @@ test('试运行报告：与 baseline.md 逐项对比；可追溯比例按成品�
   await w.exports.render(P, 'EX001', '主持人');
   w.exports.requestReview(P, 'EX001', 'looker', HUMAN);
   await w.runner.idle();
-  for (const page of [1, 2]) await w.exports.finalReview(P, 'EX001', page, { verdict: 'pass' }, HUMAN);
+  for (const page of [1, 2]) await approve(w, 'EX001', page);
   // 你填的数值；只限主持人写
   assert.throws(() => w.report.setManual(P, { revision_minutes: -1 }, '主持人'), (err) => err.status === 400);
   rep = w.report.setManual(P, { revision_minutes: 25, errors_found: 1, error_list: '第 1 页“约 1200 人”与原文措辞不同', note: '试运行第一轮' }, '主持人');
@@ -254,12 +257,12 @@ test('接口：派视觉检查、终审、填报告只限主持人；报告可�
   const base = `/api/projects/${encodeURIComponent(P)}`;
   await call('POST', `${base}/export`, { formats: ['pptx'], via: 'script' });
   await call('POST', `${base}/exports/EX001/render`, {});
-  for (const [url, body] of [[`${base}/exports/EX001/review-request`, { participant: 'looker' }], [`${base}/exports/EX001/pages/1/review`, { verdict: 'pass' }], [`${base}/report/manual`, { revision_minutes: 3 }]]) {
+  for (const [url, body] of [[`${base}/exports/EX001/review-request`, { participant: 'looker' }], [`${base}/exports/EX001/pages/1/review`, { verdict: 'pass', ...seenOf(w.exports.view(P, 'EX001'), 1) }], [`${base}/report/manual`, { revision_minutes: 3 }]]) {
     await assert.rejects(async () => call('POST', url, body, false), (err) => err.status === 403, url);
   }
   assert.deepEqual((await call('POST', `${base}/exports/EX001/review-request`, { participant: 'looker' })).tasks.map((t) => t.pages), [[1, 2]]);
   await w.runner.idle();
-  const v = await call('POST', `${base}/exports/EX001/pages/1/review`, { verdict: 'pass' });
+  const v = await call('POST', `${base}/exports/EX001/pages/1/review`, { verdict: 'pass', ...seenOf(w.exports.view(P, 'EX001'), 1) });
   assert.equal(v.visual.reviewed, 1);
   assert.equal((await call('GET', `${base}/report`)).export.id, 'EX001');
   assert.equal((await call('POST', `${base}/report/manual`, { revision_minutes: 3 })).manual.revision_minutes, 3);
@@ -323,7 +326,8 @@ test('集成：2 份来源、3 条论断、2 页幻灯片走完整流程——�
   assert.equal(v.render.ok, true);
   w.exports.requestReview(P, ex.id, 'looker', HUMAN);
   await w.runner.idle();
-  for (const page of [1, 2]) v = await w.exports.finalReview(P, ex.id, page, { verdict: 'pass', reviews: v.visual_pages[page - 1].initial?.id ?? undefined }, HUMAN);
+  v = w.exports.view(P, ex.id);
+  for (const page of [1, 2]) await approve(w, ex.id, page, { reviews: v.visual_pages[page - 1].initial?.id ?? undefined });
   v = w.exports.view(P, ex.id);
   assert.deepEqual([v.visual.initial, v.visual.passed, v.deliverable], [2, 2, true]);
   const md = fs.readFileSync(w.exports.file(P, ex.id, 'deck.md').path, 'utf8');
@@ -333,4 +337,71 @@ test('集成：2 份来源、3 条论断、2 页幻灯片走完整流程——�
   assert.deepEqual([rep.export.id, rep.rows.find((x) => x.key === 'traceable').multi], [ex.id, '2 / 2（100%）']);
   t = e.gw.trace(P, 'SL002');
   assert.deepEqual(t.root.claims.map((c) => [c.id, c.version, c.sources[0].version, c.sources[0].quote_found]), [['C002', 2, 2, true], ['C003', 2, 2, true]]);
+});
+
+// ---------- WP7b 评审（Astra，R1–R2）----------
+
+test('评审 R1：终审要带上看到的导出版本、渲染与截图；期间重新渲染过就拒绝（不自动记到新版本上），刷新后对新截图终审照常；晋升时再核一次', { skip: NO_PY }, async () => {
+  const e = await env();
+  await sample(e);
+  const w = world(e, { script: { looker: pass([1, 2]) } });
+  await w.exports.create(P, { formats: ['pptx'], via: 'script' }, '主持人');
+  const old = await w.exports.render(P, 'EX001', '主持人'); // 旧标签页看到的是 v2
+  w.exports.requestReview(P, 'EX001', 'looker', HUMAN);
+  await w.runner.idle();
+  const oldSeen = (page) => seenOf(w.exports.view(P, 'EX001'), page);
+  const seenV2 = [oldSeen(1), oldSeen(2)];
+  const initialV2 = w.exports.view(P, 'EX001').visual_pages.map((p) => p.initial.id);
+  const now = await w.exports.render(P, 'EX001', '主持人'); // 另一个标签页重新渲染：v3，截图不同
+  assert.equal(now.record.version, 3);
+  assert.notEqual(now.visual_pages[0].image, seenV2[0].image);
+  const before = e.gw.listRecords(P, 'render_check').length;
+  // 旧标签页：没做模型初查的终审、带着 v2 初查编号的终审，都拒绝
+  await assert.rejects(w.exports.finalReview(P, 'EX001', 1, { verdict: 'pass', ...seenV2[0] }, HUMAN), (err) => err.status === 409 && /你看到的是 EX001 第 2 版.*现在是第 3 版.*刷新后再审/.test(err.message));
+  await assert.rejects(w.exports.finalReview(P, 'EX001', 2, { verdict: 'pass', ...seenV2[1], reviews: initialV2[1] }, HUMAN), (err) => err.status === 409);
+  // 版本与渲染没变、截图对不上，也拒绝；没带“看到的”，400
+  await assert.rejects(w.exports.finalReview(P, 'EX001', 1, { verdict: 'pass', ...seenOf(now, 1), image: seenV2[0].image }, HUMAN), (err) => err.status === 409 && /截图也不同/.test(err.message));
+  await assert.rejects(w.exports.finalReview(P, 'EX001', 1, { verdict: 'pass' }, HUMAN), (err) => err.status === 400);
+  assert.equal(e.gw.listRecords(P, 'render_check').length, before, '没有写任何终审');
+  let v = w.exports.view(P, 'EX001');
+  assert.deepEqual([v.visual.reviewed, v.deliverable], [0, false]);
+  // 请求校验之后、晋升之前又重新渲染：晋升时按记录里写的版本再核，拒绝
+  const stale = await promoteFails(e, [{ kind: 'render_check', expected_version: 0, data: { export: { id: 'EX001', version: 3 }, render: now.record.render.dir, page: 1, slide: { id: 'SL001', version: 1 }, image: now.visual_pages[0].image, stage: 'final', verdict: 'pass' } }].map((c) => c), HUMAN).then(async (r) => {
+    assert.equal(r, null); // 这条对 v3 是对的，先写进去
+    await w.exports.render(P, 'EX001', '主持人'); // v4
+    return promoteFails(e, [{ kind: 'render_check', expected_version: 0, data: { export: { id: 'EX001', version: 3 }, render: now.record.render.dir, page: 2, slide: { id: 'SL002', version: 1 }, image: now.visual_pages[1].image, stage: 'final', verdict: 'pass' } }]);
+  });
+  assert.match(stale.map((x) => x.note ?? x.type).join(), /现在是第 4 版/);
+  // 刷新后对当前截图终审、对同一张截图改判：照常
+  v = await approve(w, 'EX001', 1, { verdict: 'fail', note: '先不通过' });
+  v = await approve(w, 'EX001', 1);
+  v = await approve(w, 'EX001', 2);
+  assert.deepEqual([v.record.version, v.visual.passed, v.deliverable], [4, 2, true]);
+});
+
+test('评审 R2：视觉检查任务外部会话不能认领（截图交不过去）；初查只能来自那次视觉检查任务，别的任务顺手写的初查、与任务不符的初查都拒绝', { skip: NO_PY }, async () => {
+  const e = await env();
+  await sample(e);
+  const w = world(e);
+  await w.exports.create(P, { formats: ['pptx'], via: 'script' }, '主持人');
+  const v = await w.exports.render(P, 'EX001', '主持人');
+  // 派发暂时不可用，任务留在 open（Astra 的复现）
+  const requestOnly = createExports({ workbench: e.workbench, gateway: e.gw, board: e.board, runner: { dispatch() { throw new Error('派发暂时不可用'); } }, participants: (id) => PEOPLE.find((p) => p.id === id), root: ROOT });
+  const t = requestOnly.requestReview(P, 'EX001', 'looker', HUMAN).tasks[0];
+  assert.equal(e.board.get(P, t.id).state, 'open');
+  assert.throws(() => w.runner.claimExternal(P, t.id, { kind: 'mcp', participant: 'looker', adapter: 'generic', verified: false }), (err) => err.status === 409 && /视觉检查.*外部会话不能认领/.test(err.message));
+  assert.equal(e.board.get(P, t.id).state, 'open', '认领被拒，任务仍可由服务端派发');
+  // 别的任务（抽取论断）的租约顺手写一条初查：拒绝
+  const page1 = { export: { id: 'EX001', version: v.record.version }, render: v.record.render.dir, page: 1, slide: { id: 'SL001', version: 1 }, image: v.visual_pages[0].image, stage: 'initial', verdict: 'pass' };
+  const other = e.board.create(P, { type: 'extract_claims' }, { created_by: HUMAN });
+  const c = e.board.claim(P, other.id, holder('looker', 'generic'));
+  const r1 = e.gw.receive(P, { request_id: rid(), task_id: other.id, attempt: c.attempt, lease_token: c.lease_token, changes: [{ kind: 'render_check', expected_version: 0, data: page1 }] });
+  const why = await e.gw.promote(P, r1.sid).then(() => null, (err) => err.details?.reasons ?? err);
+  assert.match(why.map((x) => x.note).join(), /初查只能经视觉检查任务/);
+  // 视觉检查任务本身，但交的初查与任务不符（截图不对）：拒绝；相符的通过
+  const c2 = e.board.claim(P, t.id, holder('looker', 'generic'));
+  const r2 = e.gw.receive(P, { request_id: rid(), task_id: t.id, attempt: c2.attempt, lease_token: c2.lease_token, changes: [{ kind: 'render_check', expected_version: 0, data: { ...page1, image: v.visual_pages[1].image } }] });
+  const why2 = await e.gw.promote(P, r2.sid).then(() => null, (err) => err.details?.reasons ?? err);
+  assert.match(why2.map((x) => x.note).join(), /要与视觉检查任务里的导出版本、渲染、页码和截图一致/);
+  assert.equal(w.exports.view(P, 'EX001').visual.initial, 0);
 });
