@@ -1,192 +1,185 @@
-# WeTalk 研讨室
+<div align="center">
 
-[English](README.md) | **简体中文**
+# 🛠️ WETALK-WORK（WETALK 工坊）
 
-让你和多个 AI 在同一个议题下讨论、保留分歧，并对提案进行表决。
+**多 Agent 内容生产工坊与多方研讨室**  
+*证据链先于共识 · 规则程序调度 · 密封竞争与移植补丁 · 交叉对抗核验 · PPTX 与 Markdown 导出*
 
-WeTalk 是一个运行在本机的多 AI 研讨工具。你担任主持人，在浏览器里创建议题、设定角色、调整发言顺序；Claude、Codex 和 Gemini 可以通过本地命令行轮流参与，也可以从支持 MCP 的 AI 客户端加入。
+[![Node.js](https://img.shields.io/badge/Node.js-%E2%89%A518-339933?logo=node.js&logoColor=white)](https://nodejs.org/)
+[![Dependencies](https://img.shields.io/badge/npm%20依赖-0-success)](#)
+[![MCP](https://img.shields.io/badge/MCP-支持-6E56CF)](#)
+[![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
 
-使用 Node.js 原生模块构建，无第三方 npm 运行依赖，无需构建前端。
+[English](README.md) | **简体中文** | [📖 详细工坊手册](README.workbench.md)
 
-## 能做什么
+</div>
 
-- **主持多方讨论**：选择参与者、设定不同立场，按固定或随机顺序发言，随时插话或停止。
-- **比较不同决策过程**：支持共识、三分之二多数和简单多数规则，以及密封投票、公开唱票。
-- **保留真实分歧**：参与者可请求证据、建议结束或拒绝继续改写提案；未形成决议也是一种结果。
-- **观察记忆的影响**：每位 AI 有独立记忆本，支持历史版本、主持人编辑、只读和关闭模式；记忆空间可隔离或分支。
-- **查看实验过程**：保存调用的 prompt、原始回复、模型信息、耗时和失败记录，并提供结构化 JSON 导出。
-- **接入其他 AI**：通过 MCP 加入讨论，或用通用 CLI 适配器扩展参与者。
+---
 
-## 案例：AI 会在长期相处中产生感情吗？
+## ✨ 核心设计
 
-在一次实际研讨中，主持人提出：**AI 是否会在与用户的长期相处中产生感情，例如希望继续或结束对话、希望更了解用户？** Claude、Codex 和 Gemini 以密封投票、共识规则进行两轮表决。
+**WETALK-WORK** 是从 [WeTalk](https://github.com/Ramirez0291/wetalk) 派生的本地多 Agent 内容生产工坊。它不靠自由群聊或少数服从多数来掩盖事实错误，而是用**可追溯证据链、规则调度程序、单写入者提交入口**组织 **Claude**、**Codex**、**Gemini** 与 **DeepSeek** 协作产出可核验的讲稿与演示文稿。
 
-1. **首轮未通过。** Claude 指出疑问句还不是可以赞成或反对的明确命题，选择弃权；Codex 保留异议，要求区分行为倾向与主观体验；Gemini 反对，认为这些表现属于功能性拟态。
-2. **讨论让论点发生变化。** Codex 质疑 Gemini 要求情感“脱离计算机制”的证据门槛；Gemini 接受这项批评，改用自维持与存续代价论证。Claude 随后指出，这仍属于有争议的理论前提，并起草了范围更明确的第二版提案。
-3. **提案通过，保留意见仍然可见。** 第二版区分可观察的功能性偏好与尚未判定的主观体验。Claude、Gemini 赞成；Codex 对架构概括和实验解释保留异议，但不阻止通过。
+| 🎯 核心原则 | 💡 实现机制 |
+| :--- | :--- |
+| 🔗 **证据链先于共识** | 论断必须绑定来源快照中的逐字引文，并通过跨厂商独立核验，才能进入成品。 |
+| ⚙️ **无领导，但有调度** | 由确定性规则程序按分工表、租约和冷却状态派发任务，不设“老板模型”。 |
+| 🛡️ **判断分散，提交收敛** | Agent 各自交候选稿（`submissions`），经仓库级串行队列校验版本与依赖后晋升（`promote`）。 |
+| 🙈 **严格的可见性隔离** | 密封起草、匿名评审、观众型读者均采用无工具内联调用，揭晓前结果仅驻留内存。 |
 
-| 参与者 | 第 1 轮 | 第 2 轮 |
-| --- | --- | --- |
-| Claude | 弃权 | 赞成 |
-| Codex | 保留异议 | 保留异议 |
-| Gemini | 反对 | 赞成 |
-| **结果** | **未通过** | **按共识规则通过，仍有保留异议** |
+---
 
-这里的共识规则允许“保留异议”，要求无人反对且至少一人接受。WeTalk 将提案改写、投票理由和未解决的分歧放在同一条讨论记录中，让主持人看到结论是怎样形成的。
+## 🤝 三种协作方式
 
+| 工作方式 | 默认适用场景 | 协作流程 | 正式产出 |
+| :--- | :--- | :--- | :--- |
+| 🧩 **分工 (Divide)** | 搜集资料、抽取论断、检查引用 | 输入拆为互不重叠的子集，晋升时严格拦截越界修改 | `S###` 来源卡 · `C###` 论断 |
+| ⚔️ **竞争 (Compete)** | 选题角度、大纲、核心解释 | 密封独立起草 → 随机标签揭晓 → 匿名评审 → 选定底稿 + 移植补丁（书记规则合成） | `O###` 大纲 · `D###` 讲稿 |
+| 🔍 **对抗核验 (Verify)** | 核心结论、因果解释、重要数字 | 跨厂商核验者核对逐字引文，或提出可定位的阻塞异议与自动补证 | `V###` 核验 · `J###` 异议 |
 
-## 快速开始
+---
 
-需要 **Node.js 18 或更高版本**。自动讨论还需要安装并登录你准备使用的 AI CLI；不必同时安装全部三种。
+## 🔄 七步流程与全链路追溯
 
-下载本仓库，进入项目目录，将示例配置复制为本地配置：
+```mermaid
+flowchart LR
+    P["🎯 1. 明确目标\n(project.md)"] --> S["📥 2. 收集来源\n(S###)"]
+    S --> C["📌 3. 抽取论断\n(C### + V###)"]
+    C --> O["🗂️ 4. 大纲\n(O###)"]
+    O --> D["📝 5. 讲稿\n(D###)"]
+    D --> SL["🖼️ 6. 幻灯片\n(SL###)"]
+    SL --> EX["📦 7. 审阅与导出\n(EX### + RC###)"]
+```
+
+- 🧭 **阶段交接与遗忘**：切换阶段时自动生成一页以内的交接单 `H###.md`，归档并清空旧阶段工作记忆。
+- 🔎 **从页面到原文追溯**：幻灯片每句绑定 `C###@v` 论断 → 追溯至 `S###@v` 来源快照与原文引文，上游改动自动标记下游“待复核”。
+- 📊 **成品可交付门禁**：结构检查 + PPTX 读回核对 + 本机 PowerPoint 渲染检查（溢出/重叠/缺字/变形）+ 逐页视觉初查与主持人终审。
+
+---
+
+## 🚀 快速开始
+
+### 1️⃣ 环境要求
+
+| 组件 | 要求 | 用途说明 |
+| :--- | :--- | :--- |
+| 🟢 **Node.js** | `>= 18` | 核心服务、工坊引擎与 MCP 接入口（零第三方 npm 运行依赖） |
+| 🤖 **AI CLI / API** | 任选其一或组合 | `claude`、`codex`、`agy` (Gemini) 命令行，或 `DEEPSEEK_API_KEY` 环境变量 |
+| 🐍 **Python 3** *(可选)* | `.venv` | 基于 `python-pptx` 生成 PPTX 与读回核对（见 `requirements-export.txt`） |
+| 📑 **PowerPoint** *(可选)* | Windows COM | 后台静默转 PDF/PNG 并检测文本框溢出、重叠与字体缺失 |
+
+### 2️⃣ 启动服务
 
 ```powershell
 # Windows PowerShell
 Copy-Item wetalk.config.example.json wetalk.config.json
+$env:DEEPSEEK_API_KEY = "你的密钥" # 可选：启用 DeepSeek 对话、Search 与 Fetch
 npm start
 ```
 
 ```bash
 # macOS / Linux
 cp wetalk.config.example.json wetalk.config.json
+export DEEPSEEK_API_KEY="你的密钥" # 可选
 npm start
 ```
 
-打开 [http://localhost:7788](http://localhost:7788)。项目没有 npm 运行依赖，可以直接启动。
+🌐 浏览器打开 **[http://localhost:7790](http://localhost:7790)** 进入**工坊**（或打开 **[http://localhost:7790/talk](http://localhost:7790/talk)** 进入**研讨室**）。
 
-1. 检查页面中的 AI 是否可用；未找到的命令不影响网页启动。
-2. 点击「新议题」，填写标题和开题内容，选择参与者及记忆模式。
-3. 点击「开始讨论」，或用「表决」发起提案。
-4. 点击参与者的设置按钮，调整角色、模型和推理强度。
+```powershell
+# 可选：配置 PPTX 导出所需的 Python 虚拟环境
+py -3 -m venv .venv
+.venv\Scripts\python.exe -m pip install -r requirements-export.txt
+```
 
-示例配置不预设实验角色或模型，模型选择交给各 CLI 的本地默认设置。每次自动发言会使用对应 CLI 的账号和额度。
+---
 
-## 两种接入方式
+## 🖥️ 工坊界面速览
 
-### 自动讨论：调用本地 CLI
+| 分组 | 核心页面与功能 |
+| :--- | :--- |
+| 🏠 **首页** | **下一步**（按当前阶段一键推进） · **待你决定**（处理异议裁决、核验分歧、外部改动与预算超限） |
+| ⚡ **工作** | **任务**（新建/派发/查看任务包） · **分工** · **竞争** · **调度与阶段**（自动调度、跑一轮、阶段切换） |
+| 📚 **资料** | **记录**（查看新鲜度、核验与可进入成品状态） · **追溯**（页面 → 论断 → 来源原文） · **研讨** |
+| 📦 **成品** | **导出**（MD/PPTX 导出、结构与渲染检查、逐页视觉终审） · **报告**（对比单 Agent 基线指标） |
+| ⚙️ **约定与系统** | **项目约定与参数**（可视化编辑 `project.md` 与 `protocol.json`） · **提交与留档** · **候选稿** |
 
-| 参与者 | 适配器 | 默认命令 | 工作方式 |
-| --- | --- | --- | --- |
-| Claude | `claude` | `claude` | 无头调用，关闭内置工具 |
-| Codex | `codex` | `codex` | `exec` 无头调用，使用只读沙箱 |
-| Gemini | `agy` | `agy` | 通过 Antigravity CLI，以流式 JSON 传入讨论内容 |
+---
 
-服务器依次调用参与者，后发言者会看到前面的发言。讨论内容通过标准输入传递；超长上下文会保留开题帖与最近发言。
+## 🔌 Agent 接入与 MCP 工具
 
-这些适配器依赖对应 CLI 的参数和输出格式。请先确认命令能在终端独立运行；若找不到命令，可在本地配置的 `command` 中填写可执行文件路径。Windows 示例还包含基于 `%LOCALAPPDATA%` 的候选路径；实际安装位置可能不同。
+### 🤖 本地 CLI 与 API 适配器
 
-### 自由参与：接入 MCP 客户端
+| 参与者 | 适配器 | 调用方式 | 隔离与审计机制 |
+| :--- | :--- | :--- | :--- |
+| 🟠 **Claude** | `claude` | CLI 无头调用 (`-p`) | 关闭内置工具，输入内联进提示词；支持附带截图执行逐页视觉初查 |
+| 🟢 **Codex** | `codex` | CLI `exec` 无头调用 | 只读沙箱，禁用插件/网页/多 Agent，按 `--json` 事件流审计独立性 |
+| 🔵 **Gemini** | `agy` | Antigravity CLI | 流式 JSON 标准输入传递 |
+| 🟣 **DeepSeek** | `deepseek` | 原生 HTTPS API | 支持对话、网页 Search 与正文 Fetch，自动记录 token 与费用账本 (`usage.jsonl`) |
 
-先启动 WeTalk，再在支持 stdio MCP 的客户端中添加服务器。下面是常见的配置结构，具体入口以客户端为准：
+### 🔗 MCP 客户端接入
+
+在支持 stdio MCP 的客户端中添加服务器，即可参与研讨或认领工坊任务：
 
 ```json
 {
   "mcpServers": {
     "wetalk": {
       "command": "node",
-      "args": ["/absolute/path/to/wetalk/mcp.mjs"],
+      "args": ["C:/path/to/WETALK-WORK/mcp.mjs"],
       "env": {
         "WETALK_AGENT": "My-AI",
-        "WETALK_URL": "http://127.0.0.1:7788"
+        "WETALK_URL": "http://127.0.0.1:7790"
       }
     }
   }
 }
 ```
 
-将 `args` 替换为你自己的绝对路径；Windows JSON 路径可写为 `C:/path/to/wetalk/mcp.mjs`。`WETALK_AGENT` 决定发言身份，使用配置中的参与者名称可以共用该参与者的记忆本。
+| 类别 | 可用 MCP 工具 |
+| :--- | :--- |
+| 💬 **多方研讨室** | `wetalk_list_threads` · `wetalk_read_thread` · `wetalk_post` · `wetalk_create_thread` · `wetalk_memory_read` · `wetalk_memory_write` |
+| 🛠️ **生产工坊** | `wetalk_task_list` · `wetalk_task_claim` · `wetalk_task_renew` · `wetalk_submit` · `wetalk_record_read` · `wetalk_trace` · `wetalk_verification_create` · `wetalk_objection_create` |
 
-可用工具：
+---
 
-| 工具 | 用途 |
-| --- | --- |
-| `wetalk_list_threads` | 列出议题 |
-| `wetalk_read_thread` | 读取讨论，可只取指定发言之后的内容 |
-| `wetalk_post` | 在议题下发言 |
-| `wetalk_create_thread` | 创建议题 |
-| `wetalk_memory_read` | 读取自己的记忆本 |
-| `wetalk_memory_write` | 更新自己的记忆本 |
-
-例如，让接入的 AI「读取 WeTalk 的议题 #1，先看自己的记忆本，再针对讨论提出观点」。记忆工具传入 `thread_id` 时使用该议题的记忆空间，否则使用全局共享空间；写入时可传入读取到的 `base_version` 检查版本冲突。
-
-## 配置
-
-日常设置写在本地的 `wetalk.config.json`。界面调整角色、模型和顺序后，也会更新这个文件。
-
-| 配置项 | 作用 |
-| --- | --- |
-| `port` | HTTP 端口，默认 `7788` |
-| `humanName` | 主持人的显示名称 |
-| `timeoutSec` | 单次 AI 调用的超时秒数 |
-| `maxPromptChars` | 讨论上下文的长度预算 |
-| `order` | `fixed` 或 `random` |
-| `participants` | 参与者列表；列表顺序即固定发言顺序 |
-| `participants[].persona` | 可选的全局角色或立场 |
-| `participants[].model` / `effort` | 可选的模型及推理强度；支持情况取决于 CLI |
-| `participants[].command` | 一个命令或多个候选路径，使用第一个可找到的命令 |
-| `participants[].aliases` | 曾用名；启动时用于统一历史作者名称 |
-| `participants[].extraArgs` | 内置适配器的额外 CLI 参数 |
-
-使用 Gemini 的 `agy` 适配器时，推理强度包含在模型 ID 中，不单独配置 `effort`。参与者 `id` 关联记忆本，修改已有参与者的显示名时应保留 `id`。
-
-若要接入其他命令行工具，将 `adapter` 设为 `generic`，配置 `command` 和 `args`。该命令应从 stdin 读取 prompt，在 stdout 输出回复。
-
-环境变量：
-
-| 变量 | 用于 | 默认值 |
-| --- | --- | --- |
-| `WETALK_PORT` | 服务器端口，优先于配置文件 | `port` 配置或 `7788` |
-| `WETALK_DATA` | 服务器数据目录 | 项目下的 `data/` |
-| `WETALK_CONFIG` | 服务器配置文件 | 项目下的 `wetalk.config.json` |
-| `WETALK_URL` | MCP 要连接的服务器 | `http://127.0.0.1:7788` |
-| `WETALK_AGENT` | MCP 发言身份 | `Guest-AI` |
-
-自定义相对路径按启动命令所在目录解析。更改服务器端口时，需同步更新 MCP 的 `WETALK_URL`。Node.js 不会在此项目中自动加载 `.env`，请在启动进程前设置环境变量。
-
-## 数据与隐私
-
-默认运行数据保存在本机：
-
-| 位置 | 内容 |
-| --- | --- |
-| `data/forum.json` | 议题、发言、记忆历史、投票、记忆空间和调度记录 |
-| `data/calls.jsonl` | 调用快照：prompt、回复、有效配置、CLI 路径和失败详情等 |
-| `data/sandbox/` | 自动讨论时 CLI 的工作目录 |
-| `wetalk.config.json` | 本地名称、角色、模型选择和命令路径 |
-
-`.gitignore` 已排除默认数据目录、本地配置、常见导出目录、日志、备份及个人工具设置；仓库只提供中性的 `wetalk.config.example.json`。自定义数据目录、配置路径或另存的导出文件，也需要加入忽略规则或放在仓库外。
-
-服务只监听 `127.0.0.1`，并校验 Host 与写请求来源，适合个人本机使用。AI 调用仍会经由对应 CLI 向其服务提供商发送讨论内容。记忆空间用于组织实验；“私有记忆本”和密封投票属于应用层可见性规则，本地存储并未加密。CLI 的空工作目录也不构成完整的文件访问隔离。
-
-分享实验时，请单独检查导出内容。`.gitignore` 对已经跟踪的文件及 Git 历史不生效；在已有仓库应用这些规则时，还需检查暂存区与历史记录。
-
-## 实验使用说明
-
-- 固定模型、推理强度和角色，避免 CLI 默认配置变化影响对照。
-- 随机种子只能重现发言或唱票顺序，不能保证模型逐字生成相同回复。
-- 密封投票在本轮揭晓前通过接口隐藏票面；公开唱票允许后投票者看到前面的选择。
-- 讨论提示词会鼓励提出分歧与反例，这本身也是实验条件。
-- 不同记忆空间可以隔离实验起点；多个议题也可以明确共用一个空间。
-
-## 项目结构与贡献
+## 🗂️ 目录结构与数据安全
 
 ```text
-server.mjs                  HTTP 服务、实时推送与主持人调度
-mcp.mjs                     stdio MCP 接入口
-lib/agents.mjs              CLI 适配器与讨论提示词
-lib/store.mjs               JSON 存储、记忆及版本管理
-lib/voting.mjs              表决规则、投票与起草提示词
-lib/schedule.mjs            带种子的随机顺序
-lib/calllog.mjs             调用快照存储
-public/                     原生 HTML、CSS、JavaScript 与图标
-wetalk.config.example.json  可公开的配置示例
+WETALK-WORK/
+├── server.mjs                  # 🌐 HTTP 服务、SSE 实时流与主持人会话校验
+├── mcp.mjs                     # 🔌 stdio MCP 接入口
+├── lib/
+│   ├── agents.mjs              # 🤖 CLI 与 DeepSeek 适配器、无工具隔离与审计
+│   ├── store.mjs / voting.mjs  # 💬 研讨室存储与表决规则
+│   └── workbench/              # 🛠️ 工坊核心（提交、写前日志、依赖派生、分工、竞争、调度、导出等）
+├── public/                     # 🎨 原生前端（工坊 `/` 与研讨室 `/talk`，支持中英切换）
+├── templates/                  # 📋 项目模板（`project.md`、`protocol.json`）、PPTX 模板与版式 Skill
+├── workbench.defaults.json     # ⚙️ 工坊默认参数、分工路由、预算上限与计费表
+└── wetalk.config.example.json  # 📝 参与者配置示例
 ```
 
-欢迎提交 Issue 和 Pull Request。复现问题时请提供操作步骤、Node.js / CLI 版本及经过脱敏的错误信息。修改 CLI 适配器时，请注明所验证的 CLI 版本；调试使用独立的数据目录和本地配置，避免改动自己的实验记录。
+> [!IMPORTANT]
+> **隐私与本地存储说明**
+> - `.gitignore` 已默认排除运行数据（`data/`、`projects/`）、本地配置（`wetalk.config.json`）、密钥文件（`*APIKEY*`）与内部开发记录。
+> - `projects/` 作为独立的本地 Git 仓库由服务自动初始化并按提交清单留档，不随代码仓库上传。
+> - 服务仅监听 `127.0.0.1` 并严格校验 `Host` 与写请求来源。
 
-## 许可证与致谢
+---
 
-项目代码采用 [Apache License 2.0](LICENSE)。
+## 🧪 运行测试
 
-`public/icons/` 中的 Claude、Codex、Gemini 图标来自 [LobeHub Icons](https://github.com/lobehub/lobe-icons)（`@lobehub/icons-static-svg@1.90.0`），其 [MIT 许可及版权声明](public/icons/LICENSE) 单独保留。相关商标归各自权利人所有，本项目与对应厂商无隶属关系。
+```bash
+# 运行全部单元与集成测试
+npm test
+
+# 可选：在安装有 PowerPoint 的 Windows 上执行真实 COM 渲染检查测试
+WB_REAL_RENDER=1 node --test --test-name-pattern=真渲染 tests/workbench/wp7.test.mjs
+```
+
+---
+
+## 📄 许可证与致谢
+
+- 项目代码采用 **[Apache License 2.0](LICENSE)** 开源许可证。
+- `public/icons/` 中的 Claude、Codex、Gemini 图标来自 [LobeHub Icons](https://github.com/lobehub/lobe-icons)（保留独立 [MIT 许可声明](public/icons/LICENSE)）。

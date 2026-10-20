@@ -15,7 +15,7 @@ const TEMPLATES = path.join(ROOT, 'templates', 'project');
 // 临时目录名里故意带日文和中文：用户目录本身就含日文字符
 const created = [];
 function tmpProjects() {
-  const base = fs.mkdtempSync(path.join(os.tmpdir(), 'wb-れいげつ-'));
+  const base = fs.mkdtempSync(path.join(os.tmpdir(), 'wb-テスト-'));
   created.push(base);
   return path.join(base, '项目资料');
 }

@@ -274,7 +274,7 @@ test('接口：派视觉检查、终审、填报告只限主持人；报告可�
 
 test('集成：2 份来源、3 条论断、2 页幻灯片走完整流程——提交、核验、追溯、更正来源、重新核验、导出、渲染检查、视觉检查、终审、报告（路径含日文字符）', { skip: NO_PY }, async () => {
   const e = await env();
-  assert.match(e.projectsDir, /れいげつ/);
+  assert.match(e.projectsDir, /テスト/);
   const w = world(e, { script: { looker: pass([1, 2]) } });
   // 提交：两份来源（主持人录入正文）、三条论断（DeepSeek 抽取）、两页幻灯片
   await asHost(e, [

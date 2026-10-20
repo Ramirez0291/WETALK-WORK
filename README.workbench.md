@@ -6,8 +6,6 @@
 git fetch upstream
 ```
 
-设计与开发文档在 `dev-lib/`：先读 `workbench-design-v2.md`（为什么），再读 `workbench-dev-spec-v0.2.md`（怎么做）。两者有出入时以开发文档为准。
-
 ## 运行
 
 ```bash

@@ -14,7 +14,7 @@ export const HUMAN = { kind: 'human', participant: '主持人', verified: true, 
 
 const created = [];
 const gateways = [];
-export function tmpBase(prefix = 'wb-れいげつ-') {
+export function tmpBase(prefix = 'wb-テスト-') {
   const base = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
   created.push(base);
   return base;

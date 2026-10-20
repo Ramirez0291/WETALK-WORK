@@ -83,6 +83,9 @@ Desktop.ini
 /projects/
 /.venv/
 
+# 内部设计与开发规范、评审日志
+/dev-lib/
+
 # 开发用密钥文件（只在本机，绝不提交）
 /DeepSeek-devAPIKEY.txt
 *APIKEY*
