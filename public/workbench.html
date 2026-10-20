@@ -13,10 +13,7 @@
     <label class="picker">项目
       <select id="project"></select>
     </label>
-    <form id="newProject" class="inline">
-      <input id="newName" placeholder="新项目名" maxlength="64">
-      <button>新建</button>
-    </form>
+    <button type="button" id="newProjectBtn" class="primary">＋ 新建项目</button>
     <a class="back" href="/talk">研讨室 →</a>
     <label class="picker">语言
       <select id="languageSelect" aria-label="界面语言" data-no-i18n>
@@ -26,24 +23,66 @@
     </label>
   </header>
 
-  <nav class="tabs" id="tabs">
-    <button data-tab="overview" class="on">概况</button>
-    <button data-tab="tasks">任务</button>
-    <button data-tab="schedule">调度</button>
-    <button data-tab="divide">分工</button>
-    <button data-tab="compete">竞争</button>
-    <button data-tab="export">导出</button>
-    <button data-tab="report">报告</button>
-    <button data-tab="records">记录</button>
-    <button data-tab="trace">追溯</button>
-    <button data-tab="talk">研讨</button>
-    <button data-tab="commits">提交与留档</button>
-    <button data-tab="candidates">候选稿</button>
-    <button data-tab="inbox">待你决定 <span id="inboxCount" class="count" hidden></span></button>
+  <!-- 两级导航：按要做的事分组，组里再分页。首页给出这个阶段的下一步，大部分事在首页就能开始 -->
+  <nav class="tabs" id="groups">
+    <button data-group="home" class="on">首页 <span class="count inbox-count" hidden></span></button>
+    <button data-group="work">工作</button>
+    <button data-group="material">资料</button>
+    <button data-group="product">成品</button>
+    <button data-group="system">约定与系统</button>
+  </nav>
+  <nav class="subtabs" id="tabs">
+    <button data-tab="overview" data-group="home" class="on">下一步</button>
+    <button data-tab="inbox" data-group="home">待你决定 <span class="count inbox-count" hidden></span></button>
+    <button data-tab="tasks" data-group="work">任务</button>
+    <button data-tab="divide" data-group="work">分工</button>
+    <button data-tab="compete" data-group="work">竞争</button>
+    <button data-tab="schedule" data-group="work">调度与阶段</button>
+    <button data-tab="records" data-group="material">记录</button>
+    <button data-tab="trace" data-group="material">追溯</button>
+    <button data-tab="talk" data-group="material">研讨</button>
+    <button data-tab="export" data-group="product">导出</button>
+    <button data-tab="report" data-group="product">报告</button>
+    <button data-tab="settings" data-group="system">项目约定与参数</button>
+    <button data-tab="commits" data-group="system">提交与留档</button>
+    <button data-tab="candidates" data-group="system">候选稿</button>
+    <button data-tab="new" data-group="new" hidden>新建项目</button>
   </nav>
 
   <main>
     <section id="tab-overview"></section>
+
+    <section id="tab-new" hidden>
+      <form id="wizStart" class="panel wizard">
+        <h3>新建项目</h3>
+        <p class="hint">先写一段说明，派一位你信任的 Agent 把它整理成项目约定（受众、要讲清的几件事、篇幅、风格、不做什么）。它只起草约定，不写内容；草案你逐节改过、确认后才生效，之后的任务照常按规则派发。</p>
+        <p><label class="field">项目名 <input id="wzName" maxlength="64" placeholder="例如：创世物语第二集" required></label></p>
+        <p><label class="field">想做什么<textarea id="wzBrief" rows="6" placeholder="一段话说清楚：给谁看、看完应当明白什么、大概多少页或讲多久、风格上要什么不要什么。写得越具体，草案越贴近你的意思。"></textarea></label></p>
+        <p class="tools"><span>起草者</span> <select id="wzWho"></select> <span class="hint">会调用一次模型，计入这个项目的调用次数</span></p>
+        <div class="tools">
+          <button class="primary" id="wzDraft">新建并起草约定</button>
+          <button type="button" id="wzBlank">新建，我自己填</button>
+        </div>
+      </form>
+      <div id="wizReview"></div>
+    </section>
+
+    <section id="tab-settings" hidden>
+      <div class="panel">
+        <h4>项目约定（project.md）</h4>
+        <p class="hint">每个任务包都会原样带上它：只写所有参与者都必须遵守的内容。改了以后，之后派出的任务用新版；已经派出的任务按当时的版本（任务包里存着当时实际发送的内容）。旧版本存档，按项目设置留档进 git。</p>
+        <div id="convBox"></div>
+        <div class="tools"><button type="button" id="convSave" class="primary">保存约定</button> <button type="button" id="convRedraft">让 Agent 重新起草</button> <span id="convOut" class="hint"></span></div>
+      </div>
+      <div class="panel">
+        <h4>参数（protocol.json）</h4>
+        <p class="hint">只写要改的项，其余沿用默认值。调用次数、费用这类上限可以调，不能取消；不合法的写法会被拒绝，文件不动。</p>
+        <div id="protoForm" class="grid"></div>
+        <details><summary>直接改 protocol.json</summary><textarea id="protoJson" rows="12" spellcheck="false"></textarea></details>
+        <div class="tools"><button type="button" id="protoSave" class="primary">保存参数</button> <span id="protoOut" class="hint"></span></div>
+        <details><summary>生效配置</summary><pre id="protoEffective"></pre></details>
+      </div>
+    </section>
 
     <section id="tab-records" hidden>
       <div class="tools">

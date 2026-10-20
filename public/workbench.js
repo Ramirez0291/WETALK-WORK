@@ -1,6 +1,8 @@
-// 工坊页面：项目概况、任务、分工、竞争、记录与派生状态、追溯、研讨、提交与留档、候选稿、待你决定。
+// 工坊页面。导航按要做的事分组（WP8）：首页（这个阶段的下一步、待你决定）、工作（任务、分工、竞争、调度与阶段）、
+// 资料（记录、追溯、研讨）、成品（导出、报告）、约定与系统（项目约定与参数、提交与留档、候选稿）；另有新建项目向导。
 // 界面文字用 ui`` / localized 翻译（与研讨室共用 i18n.js 和语言偏好）；记录内容、方案正文、评审意见、服务端报错原文不翻译。
 import { t as ui, localized, getLanguage, setLanguage, initStaticTranslations, translateError } from './i18n.js';
+import { parseConventions, joinConventions, hintsOf, contentOf, bodyFrom, missingOf } from './conventions.js';
 
 const $ = (s) => document.querySelector(s);
 const TOKEN = document.querySelector('meta[name="wb-host-token"]').content;
@@ -46,13 +48,22 @@ const fail = (e) => toast(`${e.message}${e.details ? '\n' + JSON.stringify(e.det
 
 // ---------- 项目 ----------
 
+// 新建项目时，接口返回和实时事件会各触发一次加载：只认最后一次调用的结果
+let loadSeq = 0;
 async function loadProjects(select) {
+  const seq = ++loadSeq;
   const list = await api('GET', '/api/projects');
+  if (seq !== loadSeq) return;
   const sel = $('#project');
   sel.innerHTML = list.map((p) => `<option value="${esc(p.name)}">${esc(p.title)}</option>`).join('') || ui('<option value="">（还没有项目）</option>');
   const want = select ?? new URLSearchParams(location.search).get('p') ?? localStorage.getItem('wb.project');
   project = list.some((p) => p.name === want) ? want : list[0]?.name ?? null;
   sel.value = project ?? '';
+  // 还没有任何项目：直接打开新建项目向导
+  if (!project && tab !== 'new') {
+    wizard = { mode: 'start' };
+    showTab('new');
+  }
   await render();
   // 从研讨室回来（?r=编号）：打开那条记录或那次竞争
   const r = new URLSearchParams(location.search).get('r');
@@ -74,40 +85,48 @@ $('#project').onchange = (e) => {
   render();
 };
 
-$('#newProject').onsubmit = async (e) => {
-  e.preventDefault();
-  const name = $('#newName').value.trim();
-  if (!name) return;
-  try {
-    const r = await api('POST', '/api/projects', { name });
-    $('#newName').value = '';
-    toast(ui`已新建项目「${r.name}」`);
-    await loadProjects(r.name);
-  } catch (err) {
-    fail(err);
+// ---------- 导航 ----------
+// 两级：组（#groups）和组里的页（#tabs）。别处用 #tabs [data-tab=…] 的 click() 跳转，照样会切到对应的组
+
+const GROUP_OF = Object.fromEntries([...document.querySelectorAll('#tabs [data-tab]')].map((b) => [b.dataset.tab, b.dataset.group]));
+const lastTab = { home: 'overview', work: 'tasks', material: 'records', product: 'export', system: 'settings', new: 'new' };
+function showTab(next) {
+  tab = next;
+  const group = GROUP_OF[next];
+  lastTab[group] = next;
+  for (const x of document.querySelectorAll('#groups button')) x.classList.toggle('on', x.dataset.group === group);
+  for (const x of document.querySelectorAll('#tabs button')) {
+    x.hidden = x.dataset.group !== group || group === 'new';
+    x.classList.toggle('on', x.dataset.tab === next);
   }
-};
-
-// ---------- 标签页 ----------
-
-for (const b of document.querySelectorAll('#tabs button')) {
-  b.onclick = () => {
-    tab = b.dataset.tab;
-    for (const x of document.querySelectorAll('#tabs button')) x.classList.toggle('on', x === b);
-    for (const s of document.querySelectorAll('main > section')) s.hidden = s.id !== `tab-${tab}`;
-    render();
-  };
+  for (const sec of document.querySelectorAll('main > section')) sec.hidden = sec.id !== `tab-${next}`;
 }
+const go = (next) => {
+  if (next !== tab) window.scrollTo(0, 0);
+  showTab(next);
+  return render();
+};
+for (const b of document.querySelectorAll('#tabs button')) b.onclick = () => go(b.dataset.tab);
+for (const b of document.querySelectorAll('#groups button')) b.onclick = () => go(lastTab[b.dataset.group]);
+showTab('overview');
 
-async function render() {
+// quiet：实时事件触发的刷新。正在首页或设置页的输入框里打字时不重画这一页，免得打断输入
+async function render({ quiet = false } = {}) {
+  if (tab === 'new') return renderWizard().catch(fail);
   if (!project) {
-    $('#tab-overview').innerHTML = ui`<p class="hint">还没有项目。在右上角输入名字新建一个，或运行 ${`<code>npm run new-project ${ui('名称')}</code>`}。</p>`;
+    $('#tab-overview').innerHTML = ui`<div class="panel next"><h3>还没有项目</h3><p>点右上角的“＋ 新建项目”：写一段说明，让你信任的 Agent 起草项目约定，你改好、确认后就可以开始。</p><p><button type="button" class="primary" id="emptyNew">＋ 新建项目</button></p></div>`;
+    $('#emptyNew').onclick = () => $('#newProjectBtn').click();
     return;
   }
   try {
     const inbox = await api('GET', P('/inbox'));
-    $('#inboxCount').hidden = !inbox.length;
-    $('#inboxCount').textContent = inbox.length;
+    for (const el of document.querySelectorAll('.inbox-count')) {
+      el.hidden = !inbox.length;
+      el.textContent = inbox.length;
+    }
+    const sec = $(`#tab-${tab}`);
+    const typing = sec?.contains(document.activeElement) && /^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement.tagName);
+    if (quiet && typing && ['overview', 'settings'].includes(tab)) return;
     await VIEWS[tab]?.(inbox);
     // 打开着的记录详情（例如核验结果陆续回来）一起刷新；正在填表单时不刷，免得冲掉输入
     const box = $('#recordDetail');
@@ -151,33 +170,13 @@ const TASK_STATE = localizedBadges({
   proposed: ['已提出', 'b-muted'], open: ['可认领', 'b-warn'], claimed: ['进行中', 'b-warn'], submitted: ['已交稿', 'b-warn'],
   done: ['完成', 'b-ok'], failed: ['失败', 'b-bad'], cancelled: ['已取消', 'b-muted'], needs_user: ['待你决定', 'b-bad'],
 });
-const VIS = localized({ sealed: '密封起草', review: '匿名评审', audience: '观众型读者', read: '读资料', export: '导出版式' });
+const VIS = localized({ sealed: '密封起草', review: '匿名评审', audience: '观众型读者', read: '读资料', export: '导出版式', visual: '视觉检查', plan: '起草约定' });
 let people = [];
 
 const VIEWS = {
-  async overview() {
-    const o = await api('GET', P());
-    const s = o.summary;
-    const card = (n, l) => `<div class="card"><div class="n">${n}</div><div class="l">${esc(l)}</div></div>`;
-    $('#tab-overview').innerHTML = ui`
-      <div class="cards">
-        ${Object.entries(KIND).map(([k, l]) => card(s.byKind[k] ?? 0, l)).join('')}
-      </div>
-      <div class="cards">
-        ${card(s.claims.supported, ui('论断：核验支持'))}
-        ${card(s.claims.unreviewed, ui('论断：未核验'))}
-        ${card(s.claims.disputed + s.claims.unsupported, ui('论断：有分歧或不支持'))}
-        ${card(s.stale, ui('待更新（stale）'))}
-        ${card(s.blocked, ui('有未解决阻塞'))}
-        ${card(s.ready, ui('可进入成品'))}
-        ${card(o.candidates.pending, ui('待晋升的候选稿'))}
-        ${card(o.commits.archivePending, ui('待留档的提交'))}
-        ${card(o.inbox, ui('待你决定'))}
-      </div>
-      <h3>项目约定（project.md）</h3>
-      <pre>${esc(o.conventions)}</pre>
-      <details><summary>生效配置</summary><pre>${esc(JSON.stringify(o.config, null, 2))}</pre></details>`;
-  },
+  // 首页：这个阶段的下一步、待你决定、项目约定、进展（见文件末尾“首页”一节）
+  overview: (inbox) => renderHome(inbox),
+  settings: () => renderSettings(),
 
   async records() {
     if (!people.length) people = (await api('GET', '/api/state')).participants.filter((x) => x.available);
@@ -276,31 +275,12 @@ const VIEWS = {
   },
 
   async inbox(items) {
-    const label = localized({
-      write_fault: '写入故障：已停止接受写入，请重启服务完成恢复', external_change: '服务进程之外改过的记录文件', bad_record_file: '读不出来的记录文件', archive_failed: 'git 留档失败',
-      task_failed: '任务失败（尝试次数用完，不再自动重派）', task_needs_user: '任务待你决定', budget_exceeded: '项目用量已到上限',
-      objection_needs_user: '异议待你裁决', claim_disputed: '论断的核验结论不一致', competition: '竞争需要你处理',
-      stagnation: '连续停滞，交给你决定', scheduler_budget: '自动调度到了用量上限', phase_switch: '阶段切换没完成',
-    });
-    const where = (i) => (i.competition ? `<a href="#" data-k="${esc(i.competition)}"><code>${esc(i.competition)}</code></a>`
-      : i.objection || i.claim ? `<a href="#" data-goto="${esc(i.objection ?? i.claim)}"><code>${esc(i.objection ?? i.claim)}</code></a>` : `<code>${esc(i.path ?? i.cid ?? i.task ?? '')}</code>`);
     $('#inboxList').innerHTML = items.length
-      ? ui`<div class="wrap"><table><tr><th>类型</th><th>位置</th><th>说明</th></tr>
-        ${items.map((i) => `<tr><td>${esc(label[i.type] ?? i.type)}</td><td>${where(i)}</td>
-          <td class="hint">${esc(i.reason ?? i.error ?? i.resolution ?? (i.type === 'claim_disputed' ? ui`计入的核验：${i.counted.join(ui('、'))}` : i.actual ? ui('内容与最后一次提交不一致') : i.expected ? ui('文件被删除') : i.type?.startsWith('task_') || i.type?.startsWith('objection') ? '' : ui('没有对应的提交记录')))}</td></tr>`).join('')}</table></div>
+      ? ui`${inboxTable(items)}
         <p class="hint">外部改动不会被提交入口覆盖：涉及这些文件的晋升会被拒绝，直到处理完。点编号打开记录详情，在那里处理异议。</p>
         <div id="inboxDetail"></div>`
       : ui('<p class="hint">没有待你决定的事项。</p>');
-    for (const a of document.querySelectorAll('#inboxList [data-goto]')) a.onclick = (e) => {
-      e.preventDefault();
-      document.querySelector('#tabs [data-tab="records"]').click();
-      setTimeout(() => showRecord(a.dataset.goto).catch(fail), 100);
-    };
-    for (const a of document.querySelectorAll('#inboxList [data-k]')) a.onclick = (e) => {
-      e.preventDefault();
-      document.querySelector('#tabs [data-tab="compete"]').click();
-      setTimeout(() => showCompetition(a.dataset.k).catch(fail), 100);
-    };
+    bindInbox($('#inboxList'));
   },
 
   // ---------- 调度与阶段（WP6） ----------
@@ -460,6 +440,33 @@ const VIEWS = {
 };
 
 $('#kindFilter').onchange = () => VIEWS.records();
+
+// 待你决定的表格：“待你决定”页和首页共用
+const INBOX_LABEL = localized({
+  write_fault: '写入故障：已停止接受写入，请重启服务完成恢复', external_change: '服务进程之外改过的记录文件', bad_record_file: '读不出来的记录文件', archive_failed: 'git 留档失败',
+  task_failed: '任务失败（尝试次数用完，不再自动重派）', task_needs_user: '任务待你决定', budget_exceeded: '项目用量已到上限',
+  objection_needs_user: '异议待你裁决', claim_disputed: '论断的核验结论不一致', competition: '竞争需要你处理',
+  stagnation: '连续停滞，交给你决定', scheduler_budget: '自动调度到了用量上限', phase_switch: '阶段切换没完成',
+});
+function inboxTable(items) {
+  const where = (i) => (i.competition ? `<a href="#" data-k="${esc(i.competition)}"><code>${esc(i.competition)}</code></a>`
+    : i.objection || i.claim ? `<a href="#" data-goto="${esc(i.objection ?? i.claim)}"><code>${esc(i.objection ?? i.claim)}</code></a>` : `<code>${esc(i.path ?? i.cid ?? i.task ?? '')}</code>`);
+  return ui`<div class="wrap"><table><tr><th>类型</th><th>位置</th><th>说明</th></tr>
+    ${items.map((i) => `<tr><td>${esc(INBOX_LABEL[i.type] ?? i.type)}</td><td>${where(i)}</td>
+      <td class="hint">${esc(i.reason ?? i.error ?? i.resolution ?? (i.type === 'claim_disputed' ? ui`计入的核验：${i.counted.join(ui('、'))}` : i.actual ? ui('内容与最后一次提交不一致') : i.expected ? ui('文件被删除') : i.type?.startsWith('task_') || i.type?.startsWith('objection') ? '' : ui('没有对应的提交记录')))}</td></tr>`).join('')}</table></div>`;
+}
+function bindInbox(root) {
+  for (const a of root.querySelectorAll('[data-goto]')) a.onclick = (e) => {
+    e.preventDefault();
+    document.querySelector('#tabs [data-tab="records"]').click();
+    setTimeout(() => showRecord(a.dataset.goto).catch(fail), 100);
+  };
+  for (const a of root.querySelectorAll('[data-k]')) a.onclick = (e) => {
+    e.preventDefault();
+    document.querySelector('#tabs [data-tab="compete"]').click();
+    setTimeout(() => showCompetition(a.dataset.k).catch(fail), 100);
+  };
+}
 
 // 重画详情（切换语言、实时刷新）时保留没提交的输入和展开着的折叠块：先记下，重画后填回。
 // 折叠块按出现顺序对应（切换语言后标题文字会变）；输入按 id、补丁理由框的编号或勾选框的 name＋value 对应。
@@ -708,7 +715,7 @@ events.onmessage = (m) => {
   if (ev.type === 'wb-project') return loadProjects(project);
   if (ev.project && ev.project !== project && ev.type !== 'wb-archive') return;
   clearTimeout(pending);
-  pending = setTimeout(render, 200); // 一次提交会连发好几个事件，合并成一次刷新
+  pending = setTimeout(() => render({ quiet: true }), 200); // 一次提交会连发好几个事件，合并成一次刷新
 };
 
 let openPacket = null; // 任务标签页里打开着的任务包：切换语言时重画
@@ -1166,5 +1173,629 @@ $('#phaseSwitch').onclick = () => {
   if (!to || !confirm(ui`切换到“${$('#phaseTo').selectedOptions[0].textContent}”阶段？旧阶段的工作记忆会先归档再清空。`)) return;
   switchPhase(to);
 };
+
+// ---------- 新建项目向导（WP8） ----------
+// 第一步：项目名和一段说明，派一位参与者起草约定（或自己填）。第二步：草案按节合并进约定，你逐节改过、确认，然后开始收集来源。
+// 起草者只出草案，不写内容、不派任务；之后的任务照常按分工表由规则派发
+
+let wizard = { mode: 'start' }; // start：填说明；review：看草案、确认约定
+const PLAN_RUNNING = new Set(['proposed', 'open', 'claimed']);
+
+$('#newProjectBtn').onclick = () => {
+  wizard = { mode: 'start' };
+  go('new');
+};
+
+// 起草者下拉框：默认上次选的那位，没有就用第一位 Claude
+function fillPlanner(sel) {
+  const keep = sel.value;
+  let saved = null;
+  try { saved = localStorage.getItem('wb.planner'); } catch {}
+  sel.innerHTML = people.map((x) => `<option value="${esc(x.id)}">${esc(x.name)}</option>`).join('') || ui('<option value="">（没有可用的参与者）</option>');
+  const want = [keep, saved, people.find((x) => x.adapter === 'claude')?.id].find((id) => id && people.some((x) => x.id === id));
+  if (want) sel.value = want;
+}
+
+const nameOf = (id) => people.find((x) => x.id === id)?.name ?? id ?? '';
+
+function requestDraft(participant, brief) {
+  try { localStorage.setItem('wb.planner', participant); } catch {}
+  return api('POST', P('/plan'), { participant, brief });
+}
+
+async function renderWizard() {
+  const start = wizard.mode === 'start' || !project;
+  $('#wizStart').hidden = !start;
+  if (start) {
+    $('#wizReview').innerHTML = '';
+    $('#wizReview').dataset.project = '';
+    await loadPeople();
+    return fillPlanner($('#wzWho'));
+  }
+  return renderReview();
+}
+
+async function startProject(draft) {
+  const name = $('#wzName').value.trim();
+  const brief = $('#wzBrief').value.trim();
+  const who = $('#wzWho').value;
+  if (!name) return toast(ui('先写项目名'), true);
+  if (draft && !brief) return toast(ui('先写一段说明，起草者才有依据'), true);
+  if (draft && !who) return toast(ui('没有可用的参与者，先自己填约定'), true);
+  const buttons = document.querySelectorAll('#wizStart button');
+  buttons.forEach((b) => (b.disabled = true));
+  try {
+    const r = await api('POST', '/api/projects', { name });
+    project = r.name;
+    try { localStorage.setItem('wb.project', project); } catch {}
+    wizard = { mode: 'review' };
+    $('#wzName').value = $('#wzBrief').value = '';
+    toast(ui`已新建项目「${r.name}」`);
+    // 项目已经建好：起草派不出去时照样进入第二步，在那里重试或自己填
+    if (draft) await requestDraft(who, brief).catch(fail);
+    await loadProjects(r.name);
+  } catch (err) {
+    fail(err);
+  } finally {
+    buttons.forEach((b) => (b.disabled = false));
+  }
+}
+$('#wizStart').onsubmit = (e) => {
+  e.preventDefault();
+  startProject(true);
+};
+$('#wzBlank').onclick = () => startProject(false);
+
+// 第二步。实时刷新时只更新状态行；编辑器里有你没保存的改动时不重画，草案到了只给一个“换成草案”的按钮
+async function renderReview() {
+  const box = $('#wizReview');
+  const mine = project;
+  const [o, pl] = await Promise.all([api('GET', P()), api('GET', P('/plan')), loadPeople()]);
+  if (project !== mine || tab !== 'new') return; // 等待期间换了项目或页面：这次的结果作废
+  const t = pl.task;
+  const running = t && PLAN_RUNNING.has(t.state);
+  const useDraft = !!pl.proposal && !pl.stale;
+  if (box.dataset.project !== project) {
+    box.dataset.project = project;
+    box.innerHTML = ui`<h3>${esc(o.title)} · 项目约定</h3>
+      <div id="wzStatus"></div>
+      <div id="wzConv"></div>
+      <div class="tools"><button type="button" class="primary" data-wz="confirm">确认约定，开始收集来源</button> <button type="button" data-wz="save">只保存，稍后再开始</button></div>
+      <details id="wzAgain"><summary>${t ? ui('重新起草') : ui('让 Agent 起草')}</summary>
+        <p><textarea id="wzBrief2" rows="4" placeholder="一段话说清楚：给谁看、看完应当明白什么、大概多少页或讲多久、风格上要什么不要什么。"></textarea></p>
+        <p class="tools"><span>起草者</span> <select id="wzWho2"></select> <button type="button" data-wz="redraft">派它起草</button></p>
+      </details>`;
+    $('#wzAgain').open = !t;
+    bindReview(box);
+  }
+  const who = esc(nameOf(t?.assigned_to));
+  let status = '';
+  if (running) status = ui`<p>${badge(ui('起草中'), 'b-warn')} ${who} 正在按你的说明起草约定，完成后草案会出现在下面。也可以不等，先自己填。 <button type="button" data-wz="cancel">取消起草</button></p>`;
+  else if (t && ['failed', 'needs_user', 'cancelled'].includes(t.state)) status = ui`<p>${badge(...(TASK_STATE[t.state] ?? [t.state, 'b-muted']))} 起草没有完成：<span class="hint">${esc(t.history.at(-1)?.reason ?? '')}</span>。可以重新起草，或自己填。</p>`;
+  else if (useDraft) status = ui`<p>${badge(ui('草案待确认'), 'b-warn')} 下面是 ${who} 的草案，已按节合并进约定，标“草案”的节是它写的。逐节改好后点确认；确认之前，任务包里用的仍是原来的约定。</p>`;
+  else if (pl.proposal) status = ui('<p class="hint">最近一份草案是按旧版约定写的（之后约定已经改过或已确认），下面显示的是现在的约定。</p>');
+  if (useDraft && pl.proposal.questions.length) status += ui`<div class="quote"><b>起草者想跟你确认：</b><ul>${pl.proposal.questions.map((q) => `<li>${esc(q)}</li>`).join('')}</ul></div>`;
+  if (useDraft && pl.proposal.ignored.length) status += ui`<p class="hint">草案里对不上约定的节（没有合并）：${esc(pl.proposal.ignored.join(ui('、')))}</p>`;
+  const conv = $('#wzConv');
+  const key = `${t?.id ?? ''}|${useDraft}|${o.hashes.conventions}`;
+  const take = conv.dataset.key !== key && conv.dataset.dirty && useDraft;
+  if (take) status += ui`<p><button type="button" data-wz="take">换成刚到的草案（丢掉你在下面的改动）</button></p>`;
+  $('#wzStatus').innerHTML = status;
+  for (const b of box.querySelectorAll('[data-wz="cancel"]')) b.onclick = () => api('POST', P(`/tasks/${t.id}/cancel`), {}).then(() => toast(ui('已取消起草')), fail).then(() => render());
+  for (const b of box.querySelectorAll('[data-wz="take"]')) b.onclick = () => {
+    conv.dataset.dirty = '';
+    conv.dataset.key = '';
+    renderReview().catch(fail);
+  };
+  fillPlanner($('#wzWho2'));
+  if (!$('#wzBrief2').value && t?.goal) $('#wzBrief2').value = t.goal;
+  if (conv.dataset.key === key || conv.dataset.dirty) return;
+  conv.dataset.key = key;
+  conv.dataset.hash = o.hashes.conventions;
+  convEditor(conv, useDraft ? pl.proposal.conventions : o.conventions, { drafted: new Set(useDraft ? Object.keys(pl.proposal.sections) : []) });
+}
+
+function bindReview(box) {
+  const save = async () => {
+    const conv = $('#wzConv');
+    const r = await api('POST', P('/conventions'), { text: convValue(conv), expected: conv.dataset.hash });
+    conv.dataset.dirty = '';
+    conv.dataset.hash = r.hashes.conventions;
+    return r;
+  };
+  box.querySelector('[data-wz="save"]').onclick = () => save().then(() => toast(ui('约定已保存')), fail).then(() => render());
+  box.querySelector('[data-wz="confirm"]').onclick = async () => {
+    try {
+      const r = await save();
+      const empty = r.missing.filter((m) => m.kind === 'empty');
+      if (empty.length && !confirm(ui`约定里还有没填的节：${empty.map((m) => m.title).join(ui('、'))}。仍然开始？`)) return render();
+      const s = await api('GET', P('/scheduler'));
+      if (!s.phase || s.phase.id === 'goal') await api('POST', P('/phase'), { to: 'sources' });
+      toast(ui('约定已确认，开始收集来源'));
+      wizard = { mode: 'start' };
+      go('overview');
+    } catch (err) {
+      fail(err);
+      render();
+    }
+  };
+  box.querySelector('[data-wz="redraft"]').onclick = async () => {
+    const brief = $('#wzBrief2').value.trim();
+    if (!brief) return toast(ui('先写一段说明，起草者才有依据'), true);
+    try {
+      await requestDraft($('#wzWho2').value, brief);
+      $('#wzConv').dataset.dirty = '';
+      $('#wzAgain').open = false;
+      toast(ui('已派出起草'));
+    } catch (err) {
+      fail(err);
+    }
+    render();
+  };
+}
+
+// ---------- 项目约定的分节编辑器 ----------
+// 每节一个输入框，模板里的引导语作占位提示；没改过的节原样写回，一个字符都不差。也可以切到直接改 Markdown
+
+function convEditor(box, md, { drafted = new Set() } = {}) {
+  const doc = parseConventions(md);
+  box._doc = doc;
+  box._raw = false;
+  box.dataset.dirty = '';
+  const miss = new Map(missingOf(md).map((m) => [m.title, m]));
+  const rows = (text) => Math.min(14, Math.max(2, text.split('\n').length + 1));
+  box.innerHTML = `<div class="conv">${doc.sections.map((sec, i) => {
+    const content = contentOf(sec.body);
+    const m = miss.get(sec.title);
+    const flag = m ? badge(m.kind === 'blank' ? ui`没填：${m.fields.join(ui('、'))}` : ui('还没填'), 'b-bad') : '';
+    return `<label class="sec"><span class="sec-title">${esc(sec.title)} ${drafted.has(sec.title) ? badge(ui('草案'), 'b-warn') : ''} ${flag}</span>
+      <textarea data-sec="${i}" rows="${rows(content)}" placeholder="${esc(hintsOf(sec.body).join('\n'))}">${esc(content)}</textarea></label>`;
+  }).join('') || ui('<p class="hint">约定里没有二级标题（## ），只能直接改 Markdown。</p>')}</div>
+    <label class="hint"><input type="checkbox" data-raw> ${esc(ui('直接改 Markdown'))}</label>
+    <textarea data-rawtext rows="18" spellcheck="false" hidden></textarea>`;
+  box.oninput = (e) => {
+    if (!e.target.matches('[data-raw]')) box.dataset.dirty = '1';
+  };
+  const raw = box.querySelector('[data-raw]');
+  raw.onchange = () => {
+    const text = box.querySelector('[data-rawtext]');
+    if (raw.checked) {
+      text.value = convValue(box);
+      box._raw = true;
+      box.querySelector('.conv').hidden = true;
+      text.hidden = false;
+    } else {
+      const dirty = box.dataset.dirty;
+      convEditor(box, text.value, { drafted });
+      box.dataset.dirty = dirty;
+    }
+  };
+  if (!doc.sections.length) {
+    raw.checked = true;
+    raw.onchange();
+  }
+}
+
+function convValue(box) {
+  if (box._raw) return box.querySelector('[data-rawtext]').value;
+  const doc = box._doc;
+  return joinConventions({
+    head: doc.head,
+    sections: doc.sections.map((sec, i) => {
+      const v = box.querySelector(`[data-sec="${i}"]`).value;
+      return v === contentOf(sec.body) ? sec : { ...sec, body: bodyFrom(v, hintsOf(sec.body)) };
+    }),
+  });
+}
+
+// ---------- 项目约定与参数（设置页） ----------
+
+// 常改的几项参数做成表单，其余直接改 JSON；表单改动同步写进下面的 JSON
+const PROTO_FIELDS = [
+  ['budget.calls', '调用次数上限', 'int'], ['budget.apiUsd', 'API 费用上限（美元）', 'num'],
+  ['slides.maxCharsPerPage', '每页正文字数上限', 'int'], ['compete.drafts', '竞争方案份数（2–6）', 'int'],
+  ['verify.coreClaimVerifiers', '核心结论要几位独立核验者', 'int'], ['verify.otherClaimVerifiers', '其他论断要几位独立核验者', 'int'],
+  ['offPeak.defer', '高峰时段不派给 DeepSeek', 'bool'], ['git.autoCommit', '自动留档进 git', 'bool'],
+];
+const getPath = (obj, p) => p.split('.').reduce((o, k) => (o == null ? undefined : o[k]), obj);
+function setPath(obj, p, v) {
+  const keys = p.split('.');
+  let o = obj;
+  for (const k of keys.slice(0, -1)) o = o[k] && typeof o[k] === 'object' ? o[k] : (o[k] = {});
+  o[keys.at(-1)] = v;
+}
+
+async function renderSettings() {
+  const mine = project;
+  const o = await api('GET', P());
+  if (project !== mine) return;
+  const box = $('#convBox');
+  if (box.dataset.project !== project || (!box.dataset.dirty && box.dataset.hash !== o.hashes.conventions)) {
+    convEditor(box, o.conventions);
+    box.dataset.project = project;
+    box.dataset.hash = o.hashes.conventions;
+    $('#convOut').textContent = '';
+  } else if (box.dataset.hash !== o.hashes.conventions) {
+    $('#convOut').innerHTML = ui`约定在别处被改过，现在保存会被拒绝。 <button type="button" id="convReload">载入最新的约定（丢掉你在这里的改动）</button>`;
+    $('#convReload').onclick = () => {
+      box.dataset.project = '';
+      render();
+    };
+  }
+  const json = $('#protoJson');
+  if (json.dataset.project !== project || (!json.dataset.dirty && json.dataset.hash !== o.hashes.protocol)) {
+    json.value = JSON.stringify(o.override, null, 2);
+    json.dataset.project = project;
+    json.dataset.hash = o.hashes.protocol ?? '';
+    json.dataset.dirty = '';
+    $('#protoOut').textContent = '';
+  }
+  renderProtoForm(o.config);
+  $('#protoEffective').textContent = JSON.stringify(o.config, null, 2);
+}
+
+function renderProtoForm(config) {
+  let override = {};
+  try { override = JSON.parse($('#protoJson').value || '{}'); } catch {}
+  $('#protoForm').innerHTML = PROTO_FIELDS.map(([p, label, type]) => {
+    const own = getPath(override, p);
+    const v = own ?? getPath(config, p);
+    const tag = own !== undefined ? badge(ui('已改'), 'b-warn') : `<span class="hint">${esc(ui('默认'))}</span>`;
+    return type === 'bool'
+      ? `<label class="field"><input type="checkbox" data-proto="${p}" data-type="bool" ${v ? 'checked' : ''}> ${esc(ui(label))} ${tag}</label>`
+      : `<label class="field">${esc(ui(label))} <input type="number" data-proto="${p}" data-type="${type}" value="${esc(v)}" step="${type === 'int' ? 1 : 'any'}" min="0"> ${tag}</label>`;
+  }).join('');
+  for (const el of document.querySelectorAll('[data-proto]')) el.onchange = () => {
+    let cur;
+    try {
+      cur = JSON.parse($('#protoJson').value || '{}');
+    } catch (e) {
+      return toast(ui`protocol.json 格式错误：${e.message}`, true);
+    }
+    setPath(cur, el.dataset.proto, el.dataset.type === 'bool' ? el.checked : Number(el.value));
+    $('#protoJson').value = JSON.stringify(cur, null, 2);
+    $('#protoJson').dataset.dirty = '1';
+    renderProtoForm(config);
+  };
+}
+
+$('#protoJson').oninput = () => ($('#protoJson').dataset.dirty = '1');
+$('#convSave').onclick = async () => {
+  const box = $('#convBox');
+  try {
+    const r = await api('POST', P('/conventions'), { text: convValue(box), expected: box.dataset.hash });
+    box.dataset.dirty = '';
+    box.dataset.hash = r.hashes.conventions;
+    toast(r.changed ? ui('约定已保存，之后派出的任务用新版') : ui('约定没有变化'));
+    box.dataset.project = ''; // 按保存后的内容重画（没填的节标记跟着更新）
+  } catch (err) {
+    fail(err);
+  }
+  render();
+};
+$('#convRedraft').onclick = () => {
+  wizard = { mode: 'review' };
+  go('new');
+};
+$('#protoSave').onclick = async () => {
+  const json = $('#protoJson');
+  let override;
+  try {
+    override = JSON.parse(json.value || '{}');
+  } catch (e) {
+    return toast(ui`protocol.json 格式错误：${e.message}`, true);
+  }
+  try {
+    const r = await api('POST', P('/protocol'), { override, expected: json.dataset.hash || null });
+    json.dataset.dirty = '';
+    json.dataset.hash = r.hashes.protocol ?? '';
+    toast(r.changed ? ui('参数已保存') : ui('参数没有变化'));
+  } catch (err) {
+    fail(err);
+  }
+  render();
+};
+
+// ---------- 首页：这个阶段的下一步（WP8） ----------
+// 按当前阶段和正式记录给出一件要做的事，就在这里开始：抓取来源、分给参与者抽取论断、派对抗核验、发起大纲或讲稿竞争、导出。
+// 每个按钮调用的都是原来各页的同一个接口（规则、上限、身份检查都不变），首页只是把它们按顺序摆出来
+
+const PHASE_NEXT = { sources: 'claims', claims: 'outline', outline: 'script', script: 'slides', slides: 'review' };
+// 竞争出作品的两个阶段：任务类型、作品种类、默认起草者（分工表里的工作类型）
+const WORK_PHASE = {
+  outline: { type: 'outline', kind: 'outline', route: 'outline' },
+  script: { type: 'core_explanation', kind: 'script', route: 'key_writing' },
+};
+let homeSearch = null; // 最近一次搜索：{ query, results }，重画首页时保留
+let homeCtx = null;
+
+// 分工表里某类工作对应的、现在可用的参与者
+const routed = (config, key) => {
+  const route = config.routing?.[key] ?? [];
+  return people.filter((x) => route.includes(x.id) || route.includes(x.adapter)).map((x) => x.id);
+};
+const pickPeople = (name, preset, exclude = new Set()) =>
+  `<span class="people">${people.filter((x) => !exclude.has(x.id)).map((x) => `<label><input type="checkbox" name="${name}" value="${esc(x.id)}" ${preset.includes(x.id) ? 'checked' : ''}> ${esc(x.name)}</label>`).join('') || ui('<span class="hint">没有可用的参与者</span>')}</span>`;
+const current = (x) => ({ id: x.record.id, version: x.record.version });
+
+async function renderHome(inbox) {
+  const mine = project;
+  const [o, s, pl, recs] = await Promise.all([api('GET', P()), api('GET', P('/scheduler')), api('GET', P('/plan')), api('GET', P('/records')), loadPeople()]);
+  const phase = s.phase?.id ?? null;
+  const [comps, divs, exps, tasks] = await Promise.all([
+    WORK_PHASE[phase] ? api('GET', P('/competitions')) : [],
+    phase === 'claims' ? api('GET', P('/divisions')) : [],
+    phase === 'review' ? api('GET', P('/exports')) : null,
+    phase === 'claims' ? api('GET', P('/tasks')) : [],
+  ]);
+  // 已经有核验任务在路上（还没结束）的论断：不再重复派
+  if (project !== mine) return; // 等待期间换了项目：这次的结果作废
+  const verifying = new Set(tasks.filter((x) => x.type === 'verify_claim' && !['done', 'failed', 'cancelled'].includes(x.state)).map((x) => x.inputs[0]?.id));
+  homeCtx = { o, s, pl, recs, comps, phase, verifying };
+  const box = $('#tab-overview');
+  // 重画时保留没提交的输入和展开着的折叠块：只在同一项目、同一阶段时（换了阶段，页面上的表单整个换了）
+  const restore = box.dataset.project === project && box.dataset.phase === String(phase) ? keepState(box) : null;
+  box.dataset.project = project;
+  box.dataset.phase = String(phase);
+  const at = s.phase ? s.phases.findIndex((x) => x.id === phase) : -1;
+  const sum = o.summary;
+  const card = (n, l) => `<div class="card"><div class="n">${n}</div><div class="l">${esc(l)}</div></div>`;
+  const missing = o.missing.map((m) => (m.kind === 'blank' ? ui`${m.title}（${m.fields.join(ui('、'))}）` : m.title));
+  box.innerHTML = ui`
+    <div class="home-head"><h2>${esc(o.title)}</h2>
+      <div class="steps">${s.phases.map((x, i) => `<span class="${i === at ? 'on' : i < at ? 'done' : ''}">${esc(ui(x.name))}</span>`).join('')}</div></div>
+    <div class="panel next">${nextStep({ o, s, pl, recs, comps, divs, exps, phase, verifying })}</div>
+    ${inbox.length ? ui`<div class="panel"><h4>待你决定 ${badge(String(inbox.length), 'b-bad')}</h4>${inboxTable(inbox.slice(0, 5))}${inbox.length > 5 ? ui`<p><a href="#" data-hm-go="inbox">全部 ${inbox.length} 项 →</a></p>` : ''}</div>` : ''}
+    <div class="panel"><h4>项目约定 ${missing.length ? badge(ui('还没填完'), 'b-bad') : badge(ui('已填好'), 'b-ok')}</h4>
+      ${missing.length ? ui`<p class="hint">没填的节：${esc(missing.join(ui('、')))}。每个任务包都会带上约定，没填的部分 Agent 拿到的就是空的。</p>` : ''}
+      <details><summary>${esc(ui('看全文'))}</summary><pre>${esc(o.conventions)}</pre></details>
+      <p><button type="button" data-hm-go="settings">编辑约定与参数</button> <button type="button" data-hm="review">让 Agent 起草</button></p></div>
+    <div class="panel"><h4>进展</h4>
+      <p class="hint">${s.round ? ui`第 ${s.round.n} 轮进行中。` : ''}自动调度${s.auto ? ui('已打开') : ui('已关闭')} · <a href="#" data-hm-go="schedule">调度与阶段 →</a></p>
+      <div class="cards">
+        ${Object.entries(KIND).map(([k, l]) => card(sum.byKind[k] ?? 0, l)).join('')}
+        ${card(sum.claims.unreviewed, ui('论断：未核验'))}
+        ${card(sum.claims.disputed + sum.claims.unsupported, ui('论断：有分歧或不支持'))}
+        ${card(sum.ready, ui('可进入成品'))}
+        ${card(sum.stale, ui('待更新（stale）'))}
+        ${card(sum.blocked, ui('有未解决阻塞'))}
+      </div></div>`;
+  bindInbox(box);
+  bindHome(box);
+  restore?.();
+}
+
+// 还缺核验、可以派对抗核验的论断：不是最新版本的不派（先改版），已有核验在路上的不重复派
+const needsVerify = (claims, verifying) => claims.filter((c) => {
+  const v = c.status.verification;
+  return !c.status.ready && c.status.freshness !== 'stale' && !verifying.has(c.record.id) && (v?.state === 'unreviewed' || (v?.state === 'supported' && !v.enough));
+});
+
+function nextStep({ o, s, pl, recs, comps, divs, exps, phase, verifying }) {
+  const of = (k) => recs.filter((x) => x.kind === k);
+  const t = pl.task;
+  const pname = (id) => ui(s.phases.find((x) => x.id === id)?.name ?? id);
+  const advance = (to, enabled = true, primary = false) =>
+    `<button type="button" ${primary ? 'class="primary"' : ''} data-hm-phase="${to}" ${enabled ? '' : 'disabled'}>${esc(ui`下一步：${pname(to)}`)} →</button>`;
+
+  if (t && PLAN_RUNNING.has(t.state)) {
+    return ui`<h3>${badge(ui('起草中'), 'b-warn')} ${esc(nameOf(t.assigned_to))} 正在起草项目约定</h3><p>完成后草案会出现在约定页，由你逐节改过、确认。</p><p><button type="button" data-hm="review">去看看</button></p>`;
+  }
+  if (pl.proposal && !pl.stale) {
+    return ui`<h3>起草好的项目约定，等你确认</h3><p>${esc(nameOf(t.assigned_to))} 已按你的说明写好草案。确认之前，任务包里用的仍是原来的约定。</p><p><button type="button" class="primary" data-hm="review">去确认</button></p>`;
+  }
+  const empty = o.missing.filter((m) => m.kind === 'empty');
+  if (!phase || phase === 'goal') {
+    if (empty.length) {
+      return ui`<h3>下一步：把项目约定填好</h3><p>每个任务包都会带上项目约定。现在还有 ${empty.length} 节没填（${esc(empty.map((m) => m.title).join(ui('、')))}），Agent 拿到的要求是空的。</p>
+        <p><button type="button" class="primary" data-hm="review">让 Agent 起草，或自己填</button> <button type="button" data-hm-go="settings">直接编辑</button></p>`;
+    }
+    return ui`<h3>下一步：收集来源</h3><p>项目约定已经填好。切换到“收集来源”阶段后，就在这里抓取网页、录入资料，建来源卡。</p><p>${advance('sources', true, true)}</p>`;
+  }
+
+  if (phase === 'sources') {
+    const n = of('source').length;
+    const qs = pl.proposal?.queries ?? [];
+    const results = homeSearch?.results ?? [];
+    return ui`<h3>下一步：收集来源 <span class="hint">已有来源卡 ${n} 张</span></h3>
+      <p class="hint">来源正文只有两个来处：按网址抓取的快照，或你手工录入的正文。之后论断的引文必须能在这些正文里逐字找到。</p>
+      <h4>按网址抓取</h4>
+      <textarea id="hmUrls" rows="3" placeholder="网址，每行一个"></textarea>
+      <div class="tools"><button type="button" class="primary" data-hm="fetch">抓取，建来源卡</button> <span class="hint">用 DeepSeek Fetch（需要 DEEPSEEK_API_KEY），每个网址一次调用</span></div>
+      <h4>先搜一搜</h4>
+      <div class="tools"><input id="hmQuery" placeholder="搜索关键词" size="28" maxlength="128"> <button type="button" data-hm="search">搜索</button>
+        ${qs.map((q) => `<button type="button" class="chip" data-hm-q="${esc(q)}">${esc(q)}</button>`).join('')}</div>
+      <p class="hint">${qs.length ? ui('后面几个是起草者建议先搜的。') : ''}${esc(ui('搜索结果只是线索，抓取原文后才能作为来源。'))}</p>
+      ${homeSearch ? ui`<div class="wrap"><table><tr><th>“${esc(homeSearch.query)}”的结果</th><th></th></tr>${results.map((r) => `<tr><td><b>${esc(r.title ?? '')}</b> <span class="hint">${esc(r.site_name ?? '')} ${esc(r.date ?? '')}</span><div class="hint">${esc(r.snippet ?? r.summary ?? '')}</div><a href="${esc(r.url)}" target="_blank" rel="noreferrer">${esc(r.url)}</a></td>
+        <td><button type="button" data-hm-fetch="${esc(r.url)}">${esc(ui('抓取原文'))}</button></td></tr>`).join('') || `<tr><td class="hint">${esc(ui('没有结果'))}</td><td></td></tr>`}</table></div>` : ''}
+      <details><summary>手工录入一张来源卡（书、PDF、没有网址的资料）</summary>
+        <p><input id="hmTitle" placeholder="标题" size="28" maxlength="300"> <input id="hmCite" placeholder="出处：书名、出版社、年份、页码" size="34"> <input id="hmUrl" placeholder="网址" size="28"> <span class="hint">出处和网址至少填一个</span></p>
+        <p><textarea id="hmText" rows="6" placeholder="正文快照：把要引用的原文粘贴在这里，引文必须能在这里逐字找到"></textarea></p>
+        <p><button type="button" data-hm="manual">录入来源卡</button></p>
+      </details>
+      <p>${advance('claims', n > 0)}</p>`;
+  }
+
+  if (phase === 'claims') {
+    const sources = of('source');
+    const claims = of('claim');
+    const toVerify = needsVerify(claims, verifying);
+    const ready = claims.filter((c) => c.status.ready).length;
+    const live = divs.filter((d) => d.type === 'extract_claims' && d.done < d.of);
+    const canDivide = o.config.modes.extract_claims === 'divide';
+    return ui`<h3>下一步：抽取论断 <span class="hint">来源 ${sources.length} 张 · 论断 ${claims.length} 条 · 可进入成品 ${ready} 条</span></h3>
+      ${live.map((d) => ui`<p>${badge(ui('进行中'), 'b-warn')} 分工 <code>${esc(d.id)}</code>：完成 ${d.done}/${d.of} 份 <a href="#" data-hm-go="divide">查看 →</a></p>`).join('')}
+      ${canDivide ? ui`<h4>把来源分给参与者抽取论断</h4>
+        <p class="hint">${sources.length} 张来源拆成互不重叠的几份，勾选的参与者每人一份，立即派发。默认勾上分工表里做抽取（extract）的参与者。</p>
+        <div class="tools">${pickPeople('hmEx', routed(o.config, 'extract'))} <button type="button" class="primary" data-hm="extract" ${sources.length ? '' : 'disabled'}>分给他们抽取论断</button></div>` : ''}
+      <h4>对抗核验</h4>
+      <p class="hint">每条论断要由与作者不同厂商的核验者独立核验（核心结论 ${o.config.verify.coreClaimVerifiers} 位，其他 ${o.config.verify.otherClaimVerifiers} 位）；支持且份数够，才能进入成品。核验者由规则自动挑选。</p>
+      <div class="tools"><button type="button" data-hm="verify" ${toVerify.length ? '' : 'disabled'}>给还缺核验的 ${toVerify.length} 条论断派对抗核验</button>${verifying.size ? ui`<span class="hint">另有 ${verifying.size} 条正在核验 · <a href="#" data-hm-go="tasks">任务 →</a></span>` : ''}</div>
+      <p>${advance('outline', ready > 0)}</p>`;
+  }
+
+  if (WORK_PHASE[phase]) {
+    const w = WORK_PHASE[phase];
+    const works = of(w.kind);
+    const label = KIND[w.kind];
+    const live = comps.filter((k) => k.kind === w.kind && !['closed', 'cancelled'].includes(k.stage));
+    const n = o.config.compete.drafts;
+    const ready = of('claim').filter((c) => c.status.ready).length;
+    const canCompete = o.config.modes[w.type] === 'compete';
+    return ui`<h3>下一步：${esc(label)} <span class="hint">已有 ${works.length} 份</span></h3>
+      ${live.map((k) => ui`<p>${badge(...(K_STAGE[k.stage] ?? [k.stage, 'b-muted']))} 竞争 <code>${esc(k.id)}</code>《${esc(k.title)}》 <button type="button" class="primary" data-hm-k="${esc(k.id)}">打开</button></p>`).join('')}
+      ${!live.length && canCompete ? ui`<p class="hint">几位起草者同时独立写${esc(label)}，完成前互不可见 → 揭晓 → 匿名评审 → 你选定一份 → 落选方案里值得保留的部分逐条移植。输入：可进入成品的论断 ${ready} 条${phase === 'script' ? ui('，以及最新的大纲') : ''}。</p>
+        <div class="tools"><span>起草者（选 ${n} 位）</span> ${pickPeople('hmK', routed(o.config, w.route).slice(0, n))}</div>
+        <div class="tools"><input id="hmKGoal" placeholder="要求（可选）" size="40" maxlength="3600"> <button type="button" class="primary" data-hm="compete">发起${esc(label)}竞争</button></div>` : ''}
+      <p>${advance(PHASE_NEXT[phase], works.length > 0)}</p>`;
+  }
+
+  if (phase === 'slides') {
+    const n = of('slide').length;
+    return ui`<h3>下一步：幻灯片 <span class="hint">已有 ${n} 页</span></h3>
+      <p>把讲稿拆成每页一条幻灯片记录：标题、正文、讲者备注，以及这一页引用的论断。正文每个句子要带论断编号（如 C001），或标为〔非事实〕。</p>
+      <p class="hint">这一步还没有自动化：在“候选稿”里按示例录入（“示例：来源＋论断＋页面”里有一页的写法）。</p>
+      <p><button type="button" data-hm-go="candidates">去候选稿录入</button> ${advance('review', n > 0)}</p>`;
+  }
+
+  if (phase === 'review') {
+    const latest = exps?.exports?.[0] ?? null;
+    return ui`<h3>下一步：导出与审阅</h3>
+      <p class="hint">导出 Markdown 和 PPTX，做渲染检查，再逐页终审。结构检查、渲染检查都通过、每页都经你终审通过，才可交付。</p>
+      ${latest ? ui`<p>最近一次导出 <code>${esc(latest.id)}</code>：${latest.deliverable ? badge(ui('可交付'), 'b-ok') : badge(ui('还不可交付'), 'b-warn')} ${fresh(latest)} <button type="button" class="primary" data-hm-ex="${esc(latest.id)}">打开</button></p>` : ''}
+      <p><button type="button" ${latest ? '' : 'class="primary"'} data-hm="export">${latest ? ui('重新导出') : ui('导出 Markdown 和 PPTX')}</button></p>`;
+  }
+  return '';
+}
+
+// 一个按钮的操作：执行期间禁用，结束后刷新首页
+async function busy(btn, fn) {
+  btn.disabled = true;
+  try {
+    await fn();
+  } catch (err) {
+    fail(err);
+  } finally {
+    btn.disabled = false;
+  }
+  render();
+}
+
+function bindHome(box) {
+  const { o, recs, phase } = homeCtx;
+  const of = (k) => recs.filter((x) => x.kind === k);
+  for (const a of box.querySelectorAll('[data-hm-go]')) a.onclick = (e) => (e.preventDefault(), go(a.dataset.hmGo));
+  for (const b of box.querySelectorAll('[data-hm="review"]')) b.onclick = () => {
+    wizard = { mode: 'review' };
+    go('new');
+  };
+  for (const b of box.querySelectorAll('[data-hm-phase]')) b.onclick = () => {
+    const to = b.dataset.hmPhase;
+    const name = ui(homeCtx.s.phases.find((x) => x.id === to)?.name ?? to);
+    if (homeCtx.phase && !confirm(ui`切换到“${name}”阶段？旧阶段的工作记忆会先归档再清空。`)) return;
+    busy(b, async () => {
+      const r = await api('POST', P('/phase'), { to });
+      toast(ui`已切换到“${name}”阶段，交接单 ${r.handoff.id}`);
+    });
+  };
+  const fetchOne = (url) => api('POST', P('/web/fetch'), { url, create: true });
+  const fetchBtn = box.querySelector('[data-hm="fetch"]');
+  if (fetchBtn) fetchBtn.onclick = () => busy(fetchBtn, async () => {
+    const urls = $('#hmUrls').value.split(/\r?\n/).map((x) => x.trim()).filter(Boolean);
+    if (!urls.length) return toast(ui('先填网址，每行一个'), true);
+    const failed = [];
+    let ok = 0;
+    for (const url of urls) {
+      try {
+        await fetchOne(url);
+        ok++;
+      } catch (err) {
+        failed.push(`${url}：${err.message}`);
+      }
+    }
+    $('#hmUrls').value = failed.map((x) => x.split('：')[0]).join('\n'); // 没抓到的留在框里
+    toast(ui`抓取了 ${ok} 个网址${failed.length ? ui`；${failed.length} 个没抓到：\n${failed.join('\n')}` : ''}`, failed.length > 0);
+  });
+  const search = (btn, query) => busy(btn, async () => {
+    if (!query) return toast(ui('先写搜索关键词'), true);
+    const r = await api('POST', P('/web/search'), { query, count: 8 });
+    homeSearch = { query, results: r.results };
+  });
+  const searchBtn = box.querySelector('[data-hm="search"]');
+  if (searchBtn) searchBtn.onclick = () => search(searchBtn, $('#hmQuery').value.trim());
+  for (const b of box.querySelectorAll('[data-hm-q]')) b.onclick = () => {
+    $('#hmQuery').value = b.dataset.hmQ;
+    search(b, b.dataset.hmQ);
+  };
+  for (const b of box.querySelectorAll('[data-hm-fetch]')) b.onclick = () => busy(b, async () => {
+    const r = await fetchOne(b.dataset.hmFetch);
+    toast(ui`已建来源卡 ${r.source?.id ?? ''}`);
+  });
+  const manual = box.querySelector('[data-hm="manual"]');
+  if (manual) manual.onclick = () => busy(manual, async () => {
+    const title = $('#hmTitle').value.trim();
+    const text = $('#hmText').value.trim();
+    if (!title || !text) return toast(ui('标题和正文快照都要填'), true);
+    if (!$('#hmCite').value.trim() && !$('#hmUrl').value.trim()) return toast(ui('出处和网址至少填一个'), true);
+    const data = { title, text };
+    if ($('#hmCite').value.trim()) data.citation = $('#hmCite').value.trim();
+    if ($('#hmUrl').value.trim()) data.url = $('#hmUrl').value.trim();
+    const receipt = await api('POST', P('/submissions'), { request_id: `web-${crypto.randomUUID()}`, changes: [{ kind: 'source', expected_version: 0, data }] });
+    const r = await api('POST', P(`/submissions/${encodeURIComponent(receipt.sid)}/promote`), {});
+    for (const id of ['#hmTitle', '#hmCite', '#hmUrl', '#hmText']) $(id).value = '';
+    toast(ui`已录入来源卡 ${r.records[0].id}`);
+  });
+  const extract = box.querySelector('[data-hm="extract"]');
+  if (extract) extract.onclick = () => busy(extract, async () => {
+    const participants = checked('hmEx');
+    if (!participants.length) return toast(ui('至少勾选一位参与者'), true);
+    const r = await api('POST', P('/divide'), { type: 'extract_claims', title: ui('抽取论断'), inputs: of('source').map(current), participants });
+    const bad = r.dispatched.filter((x) => !x.dispatched);
+    toast(ui`已发起分工 ${r.id}：${r.parts.length} 份${bad.length ? ui`；没派发出去：${bad.map((x) => ui`${x.task}（${x.error}）`).join(ui('；'))}` : ''}`, bad.length > 0);
+  });
+  const verify = box.querySelector('[data-hm="verify"]');
+  if (verify) verify.onclick = () => busy(verify, async () => {
+    const claims = needsVerify(of('claim'), homeCtx.verifying);
+    const failed = [];
+    let n = 0;
+    for (const c of claims) {
+      try {
+        n += (await api('POST', P(`/claims/${c.record.id}/verify`), {})).dispatched.length;
+      } catch (err) {
+        failed.push(`${c.record.id}：${err.message}`);
+      }
+    }
+    toast(ui`派出 ${n} 个核验任务${failed.length ? ui`；${failed.length} 条没派出去：\n${failed.join('\n')}` : ''}`, failed.length > 0);
+  });
+  const compete = box.querySelector('[data-hm="compete"]');
+  if (compete) compete.onclick = () => busy(compete, async () => {
+    const w = WORK_PHASE[phase];
+    const inputs = of('claim').filter((c) => c.status.ready).map(current);
+    if (phase === 'script') {
+      const outline = of('outline').at(-1);
+      if (outline) inputs.unshift(current(outline));
+    }
+    const r = await api('POST', P('/compete'), { type: w.type, title: `${o.title}${KIND[w.kind]}`, goal: $('#hmKGoal').value.trim(), inputs, participants: checked('hmK') });
+    const bad = r.dispatched.filter((x) => !x.dispatched);
+    toast(ui`已发起竞争 ${r.id}${bad.length ? ui`；没派发出去：${bad.map((x) => ui`${x.task}（${x.error}）`).join(ui('；'))}` : ui('，方案正在密封起草')}`, bad.length > 0);
+  });
+  for (const b of box.querySelectorAll('[data-hm-k]')) b.onclick = () => {
+    go('compete');
+    showCompetition(b.dataset.hmK).catch(fail);
+  };
+  for (const b of box.querySelectorAll('[data-hm-ex]')) b.onclick = () => {
+    go('export');
+    setTimeout(() => showExport(b.dataset.hmEx).catch(fail), 100);
+  };
+  const exp = box.querySelector('[data-hm="export"]');
+  if (exp) exp.onclick = () => busy(exp, async () => {
+    const r = await api('POST', P('/export'), {});
+    if (r.export) {
+      toast(ui`已导出 ${r.export.id}`);
+      go('export');
+      setTimeout(() => showExport(r.export.id).catch(fail), 100);
+    } else toast(ui`已派给 ${r.task.assigned_to} 出版式方案（任务 ${r.task.id}），交来后自动生成`);
+  });
+}
 
 loadProjects();

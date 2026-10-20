@@ -831,7 +831,7 @@ function resolveSpace(input) {
 
 // 工坊是主页面；研讨室挪到 /talk（/workbench 保留为工坊的别名）
 const STATIC = {
-  '/': 'workbench.html', '/workbench': 'workbench.html', '/workbench.js': 'workbench.js', '/workbench.css': 'workbench.css',
+  '/': 'workbench.html', '/workbench': 'workbench.html', '/workbench.js': 'workbench.js', '/workbench.css': 'workbench.css', '/conventions.js': 'conventions.js',
   '/talk': 'index.html', '/app.js': 'app.js', '/style.css': 'style.css', '/i18n.js': 'i18n.js', '/locales/en.js': 'locales/en.js',
 };
 const MIME = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.svg': 'image/svg+xml' };
