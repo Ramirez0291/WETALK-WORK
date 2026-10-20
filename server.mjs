@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { createStore } from './lib/store.mjs';
 import { createCallLog } from './lib/calllog.mjs';
 import { rngFrom, normalizeSeed, shuffle, buildQueue } from './lib/schedule.mjs';
-import { runAgent, buildPrompt, parseReply, resolveCommand, listOptions, isCombined, isApiAdapter, MEMORY_MAX_CHARS, CHOICE_LABEL } from './lib/agents.mjs';
+import { runAgent, buildPrompt, parseReply, resolveCommand, listOptions, isCombined, isApiAdapter, canSeeImages, MEMORY_MAX_CHARS, CHOICE_LABEL } from './lib/agents.mjs';
 import { createDeepseekClient, createRateLimiter, chatCost } from './lib/workbench/deepseek.mjs';
 import { createUsage } from './lib/workbench/usage.mjs';
 import { createWebTools } from './lib/workbench/web.mjs';
@@ -19,6 +19,7 @@ import { createDivisions } from './lib/workbench/divide.mjs';
 import { phaseSpace } from './lib/workbench/phases.mjs';
 import { createScheduler } from './lib/workbench/scheduler.mjs';
 import { createExports } from './lib/workbench/exports.mjs';
+import { createReport } from './lib/workbench/report.mjs';
 import { cleanConventions } from './lib/workbench/packets.mjs';
 import { RULES, tally, decideOutcome, buildVotePrompt, parseVote, buildDraftPrompt, parseDraft, resultText } from './lib/voting.mjs';
 import { createWorkbench, loadDefaults } from './lib/workbench/project.mjs';
@@ -108,6 +109,8 @@ scheduler = createScheduler({
 });
 // 导出（WP7）：Markdown / PPTX，结构检查、读回核对、渲染检查；导出结果是正式记录 EX###
 exportsSvc = createExports({ workbench, gateway, board, runner, participants: participantById, root: ROOT, onEvent: wbEvent });
+// 试运行报告（WP7b）：与单 Agent 基线逐项对比
+const report = createReport({ workbench, gateway, usage, exports: exportsSvc });
 const inboxCountOf = (p) => inboxItems({ gateway, board, usage, competitions, scheduler }, p).length; // 待你决定的条数，交接单里用
 // 任务的重启恢复：服务自己发起的调用已不存在，这些尝试释放；已交稿但没来得及晋升的，补一次晋升
 for (const { name } of workbench.list()) {
@@ -146,6 +149,7 @@ const publicParticipant = (p) => ({
   effort: p.effort ?? null,
   combined: isCombined(p), // 模型 id 里已经包含推理强度（Gemini）
   available: !!p.resolved,
+  seesImages: canSeeImages(p), // 能做视觉检查（WP7b：看页面截图）
 });
 
 // 按 id / 名字 / 曾用名 找参与者（都不区分大小写）
@@ -1250,7 +1254,7 @@ const routes = [
   }],
 
   ...workbenchRoutes({
-    workbench, gateway, web, usage, board, runner, sealed, flow, competitions, divisions, scheduler, exports: exportsSvc, readJson, hostToken: HOST_TOKEN, humanName: config.humanName,
+    workbench, gateway, web, usage, board, runner, sealed, flow, competitions, divisions, scheduler, exports: exportsSvc, report, readJson, hostToken: HOST_TOKEN, humanName: config.humanName,
     participantByName: (name) => findParticipant(name),
     participants: () => participants,
   }),

@@ -33,6 +33,7 @@
     <button data-tab="divide">分工</button>
     <button data-tab="compete">竞争</button>
     <button data-tab="export">导出</button>
+    <button data-tab="report">报告</button>
     <button data-tab="records">记录</button>
     <button data-tab="trace">追溯</button>
     <button data-tab="talk">研讨</button>
@@ -162,6 +163,21 @@
       <div id="exportTasks"></div>
       <div id="exportList"></div>
       <div id="exportDetail" class="detail" hidden></div>
+    </section>
+
+    <section id="tab-report" hidden>
+      <div id="reportView"></div>
+      <form id="reportManual" class="panel">
+        <h4>你填的数值</h4>
+        <p class="hint">程序算不出来的两项：从初稿到你愿意分享花了多少时间，以及你抽查发现的实质错误（事实错误、出处错误、引文不支持结论等；措辞和排版不算）。</p>
+        <div class="tools">
+          <label>修改时间（分钟） <input id="rmMinutes" type="number" min="0" step="1"></label>
+          <label>抽查发现的实质错误（条） <input id="rmErrors" type="number" min="0" step="1"></label>
+        </div>
+        <textarea id="rmList" rows="3" placeholder="错误清单：每条写页码、错误内容、怎么发现的"></textarea>
+        <textarea id="rmNote" rows="2" placeholder="备注（可选）"></textarea>
+        <div class="tools"><button class="primary">保存</button></div>
+      </form>
     </section>
 
     <section id="tab-talk" hidden>

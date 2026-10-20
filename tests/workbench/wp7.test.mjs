@@ -205,7 +205,10 @@ test('渲染检查（假渲染器）：结果写成导出记录的新版本；�
   await w.exports.create(P, { formats: ['pptx'], via: 'script' }, '主持人');
   let v = await w.exports.render(P, 'EX001', '主持人');
   assert.equal(v.record.version, 2);
-  assert.deepEqual([v.render.ok, v.render.errors, v.deliverable], [true, 0, true]);
+  // 渲染检查通过，但逐页终审（WP7b）还没做：还不可交付；两页都终审通过后才可交付
+  assert.deepEqual([v.render.ok, v.render.errors, v.deliverable, v.visual.reviewed], [true, 0, false, 0]);
+  for (const page of [1, 2]) v = await w.exports.finalReview(P, 'EX001', page, { verdict: 'pass' }, HUMAN);
+  assert.deepEqual([v.visual.passed, v.deliverable], [2, true]);
   assert.deepEqual(v.record.render.pages.map((p) => [p.page, p.slide, p.png]), [[1, 'SL001', 'p01.png'], [2, 'SL002', 'p02.png']]);
   assert.ok(v.files.includes(`${v.record.render.dir}/p02.png`));
   const png = w.exports.file(P, 'EX001', `${v.record.render.dir}/p01.png`);

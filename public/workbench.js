@@ -416,15 +416,36 @@ const VIEWS = {
       : '';
     const check = (c, none) => (c == null ? badge(none, 'b-muted') : c.ok === true ? badge(ui('通过'), 'b-ok') : c.ok === false ? badge(ui`${c.errors} 个问题`, 'b-bad') : badge(ui('未检查完'), 'b-warn'));
     $('#exportList').innerHTML = r.exports.length
-      ? ui`<div class="wrap"><table><tr><th>导出</th><th>时间</th><th>页数</th><th>格式</th><th>方式</th><th>结构检查</th><th>读回核对</th><th>渲染检查</th><th>状态</th></tr>
+      ? ui`<div class="wrap"><table><tr><th>导出</th><th>时间</th><th>页数</th><th>格式</th><th>方式</th><th>结构检查</th><th>读回核对</th><th>渲染检查</th><th>逐页终审</th><th>状态</th></tr>
         ${r.exports.map((x) => `<tr class="click" data-ex="${esc(x.id)}"><td><code>${esc(x.id)}</code> <span class="hint">v${x.version}</span></td><td class="hint">${time(x.at)}</td><td>${x.pages}</td>
           <td>${esc(x.formats.join(' + '))}</td><td>${esc(x.via === 'script' ? ui('脚本') : x.via)}${x.template ? `<div class="hint">${esc(x.template)}${x.skill ? ` · ${esc(x.skill)}` : ''}</div>` : ''}</td>
           <td>${check(x.structure, '')}</td><td>${check(x.readback, ui('无 PPTX'))}</td><td>${check(x.render, x.formats.includes('pptx') ? ui('还没做') : ui('无 PPTX'))}</td>
+          <td>${x.visual ? badge(ui`${x.visual.passed}/${x.visual.total} 页通过`, x.visual.ok ? 'b-ok' : x.visual.reviewed ? 'b-warn' : 'b-muted') : ''}</td>
           <td>${fresh(x)} ${x.live && !x.live.ok ? badge(ui('现在有问题'), 'b-bad') : ''} ${x.deliverable ? badge(ui('可交付'), 'b-ok') : ''}</td></tr>`).join('')}</table></div>`
       : ui('<p class="hint">还没有导出。</p>');
     for (const tr of document.querySelectorAll('#exportList tr.click')) tr.onclick = () => showExport(tr.dataset.ex).catch(fail);
     for (const b of document.querySelectorAll('[data-exbuild]')) b.onclick = () => api('POST', P(`/exports/tasks/${b.dataset.exbuild}/build`), {}).then((x) => toast(ui`已生成 ${x.id}`), fail).then(render);
     if (openExport && !$('#exportDetail').hidden) await showExport(openExport, { scroll: false });
+  },
+
+  // ---------- 试运行报告（WP7b） ----------
+  async report() {
+    const r = await api('GET', P('/report'));
+    const ex = r.export;
+    $('#reportView').innerHTML = ui`<h3>试运行报告</h3>
+      <p class="hint">和单 Agent 基线（baseline.md）逐项对比。程序算得出来的直接算；修改时间和抽查发现的实质错误由你在下面填。</p>
+      <p>${ex ? ui`成品：导出 <code>${esc(ex.id)}</code> 第 ${ex.version} 版，${ex.pages} 页` : ui('还没有导出')} ${ex ? (ex.deliverable ? badge(ui('可交付'), 'b-ok') : badge(ui('还不可交付'), 'b-warn')) : ''} · <a href="${P('/report.md')}">${esc(ui('下载 Markdown'))}</a></p>
+      <div class="wrap"><table><tr><th>指标</th><th>单 Agent 基线</th><th>多 Agent 版</th><th>说明</th></tr>
+      ${r.rows.map((x) => `<tr><td>${esc(ui(x.name))}</td><td>${esc(x.baseline ?? '—')}</td><td>${esc(x.multi ?? '—')}</td><td class="hint">${esc(x.note ?? '')}</td></tr>`).join('')}</table></div>
+      ${r.trace.length ? ui`<h4>论断追溯</h4><p>${r.trace.map((t) => `<code>${esc(t.id)}@${t.version}</code> ${t.ok ? badge(ui('可追溯'), 'b-ok') : badge(ui('追溯不到有效证据'), 'b-bad')}`).join(' ')}</p>` : ''}
+      ${r.notes.length ? `<ul class="hint">${r.notes.map((n) => `<li>${esc(n)}</li>`).join('')}</ul>` : ''}`;
+    const m = r.manual;
+    if (!$('#reportManual').contains(document.activeElement)) {
+      $('#rmMinutes').value = m.revision_minutes ?? '';
+      $('#rmErrors').value = m.errors_found ?? '';
+      $('#rmList').value = m.error_list ?? '';
+      $('#rmNote').value = m.note ?? '';
+    }
   },
 
   // ---------- 研讨：这个项目里开的议题 ----------
@@ -782,6 +803,27 @@ $('#newCompetition').onsubmit = async (e) => {
 const ISSUE_LEVEL = localizedBadges({ error: ['问题', 'b-bad'], warn: ['提示', 'b-warn'] });
 const issueList = (issues) => (issues.length ? `<ul>${issues.map((i) => `<li>${badge(...ISSUE_LEVEL[i.level])} ${esc(i.message)}</li>`).join('')}</ul>` : '');
 let openExport = null;
+const R_VERDICT = localizedBadges({ pass: ['通过', 'b-ok'], fail: ['不通过', 'b-bad'] });
+const R_KIND = localized({ overflow: '溢出', overlap: '重叠', font: '字体', chart: '图表', image: '图片', readability: '看不清', other: '其他' });
+// 逐页的视觉检查：派一位能看图的参与者初查（模型），你逐页终审；每页都终审通过才可交付
+function visualPanel(v, rd) {
+  if (!v.visual_pages) return '';
+  const seers = people.filter((p) => p.seesImages);
+  const tasks = v.review_tasks.filter((t) => t.version === v.record.version);
+  return ui`<h4>逐页视觉检查</h4>
+    <p class="hint">模型看截图初查（不给工具，只看版面），你逐页终审；每页都终审通过、其他检查也通过，才可交付。重新渲染后要重新审。</p>
+    <p>${badge(ui`你终审通过 ${v.visual.passed}/${v.visual.total} 页`, v.visual.ok ? 'b-ok' : 'b-warn')} <span class="hint">${esc(ui`模型初查了 ${v.visual.initial} 页`)}</span></p>
+    ${rd.pages.every((p) => p.image) ? ui`<div class="tools"><select id="exReviewer">${seers.map((p) => `<option value="${esc(p.id)}">${esc(p.name)}</option>`).join('')}</select> <button type="button" id="exReview" ${seers.length && v.freshness === 'current' ? '' : 'disabled'}>派它做视觉初查</button> <span class="hint">${seers.length ? ui('会调用一次模型（每次最多 8 页）') : ui('没有能看图的参与者')}</span></div>` : ui('<p class="hint">这次渲染没有页面截图（没有用 PowerPoint），做不了视觉检查。</p>')}
+    ${tasks.length ? `<ul>${tasks.map((t) => `<li><code>${esc(t.id)}</code> ${esc(t.assigned_to ?? '')} ${badge(...(TASK_STATE[t.state] ?? [t.state, 'b-muted']))} <span class="hint">${esc(ui`第 ${t.pages.join(ui('、'))} 页`)}${['failed', 'open', 'needs_user'].includes(t.state) && t.reason ? ` · ${esc(t.reason)}` : ''}</span></li>`).join('')}</ul>` : ''}`;
+}
+function pageReview(p, v) {
+  const one = (c) => `${badge(...R_VERDICT[c.verdict])} <span class="hint">${esc(c.by ?? '')}</span>${c.issues.length ? `<ul>${c.issues.map((i) => `<li>${esc(R_KIND[i.kind] ?? i.kind)}：${esc(i.note)}</li>`).join('')}</ul>` : ''}${c.note ? `<div class="hint">${esc(c.note)}</div>` : ''}`;
+  return ui`<div class="review">
+    <div><b>模型初查</b> ${p.initial ? one(p.initial) : ui('<span class="hint">还没有</span>')}</div>
+    <div><b>你的终审</b> ${p.final ? one(p.final) : ui('<span class="hint">还没有</span>')}</div>
+    ${v.freshness === 'current' ? ui`<div class="tools"><input data-note="${p.page}" placeholder="终审说明（不通过时必填）" size="18"> <button type="button" data-final="pass" data-page="${p.page}" data-reviews="${esc(p.initial?.id ?? '')}">通过</button> <button type="button" data-final="fail" data-page="${p.page}" data-reviews="${esc(p.initial?.id ?? '')}">不通过</button></div>` : ''}
+  </div>`;
+}
 async function showExport(id, { scroll = true } = {}) {
   openExport = id;
   const v = await api('GET', P(`/exports/${id}`));
@@ -806,8 +848,31 @@ async function showExport(id, { scroll = true } = {}) {
       <span class="hint">用本机 PowerPoint 在后台把 PPTX 转成 PDF 和逐页图片，程序查文字溢出与重叠、字体缺失、图片变形；图表标签要看图确认。逐页的视觉检查在下一步（WP7b）。</span></p>
       ${rd ? ui`<p class="hint">${esc(rd.engine === 'powerpoint' ? `PowerPoint ${rd.powerpoint ?? ''}` : ui('没有 PowerPoint，只查了字体、图片和图表'))} · ${time(rd.at)} · 用到的字体：${esc(rd.fonts.used.join(ui('、')) || '—')}${rd.fonts.missing.length ? ui` · <b>本机没有：${esc(rd.fonts.missing.join(ui('、')))}</b>` : ''}</p>
         ${issueList(rd.issues)}
-        <div class="pages">${rd.pages.map((p) => `<figure>${p.png ? `<a href="${file(`${rd.dir}/${p.png}`)}" target="_blank"><img src="${file(`${rd.dir}/${p.png}`)}" alt="p${p.page}" loading="lazy"></a>` : ''}
-          <figcaption>${esc(ui`第 ${p.page} 页`)} ${p.slide ? `<code>${esc(p.slide)}</code>` : ''} ${p.issues.length ? '' : badge(ui('通过'), 'b-ok')}</figcaption>${issueList(p.issues)}</figure>`).join('')}</div>` : ''}` : ''}`;
+        ${visualPanel(v, rd)}
+        <div class="pages">${(v.visual_pages ?? rd.pages).map((p) => `<figure>${p.png ? `<a href="${file(`${rd.dir}/${p.png}`)}" target="_blank"><img src="${file(`${rd.dir}/${p.png}`)}" alt="p${p.page}" loading="lazy"></a>` : ''}
+          <figcaption>${esc(ui`第 ${p.page} 页`)} ${p.slide ? `<code>${esc(p.slide)}</code>` : ''} ${p.issues.length ? '' : badge(ui('程序检查通过'), 'b-ok')}</figcaption>${issueList(p.issues)}
+          ${v.visual_pages ? pageReview(p, v) : ''}</figure>`).join('')}</div>` : ''}` : ''}`;
+  for (const b of box.querySelectorAll('[data-final]')) b.onclick = async () => {
+    const page = Number(b.dataset.page);
+    const note = box.querySelector(`[data-note="${page}"]`).value.trim();
+    if (b.dataset.final === 'fail' && !note) return toast(ui('判为不通过时，写一句问题在哪里'), true);
+    try {
+      await api('POST', P(`/exports/${id}/pages/${page}/review`), { verdict: b.dataset.final, ...(note ? { note } : {}), ...(b.dataset.reviews ? { reviews: b.dataset.reviews } : {}) });
+      await showExport(id, { scroll: false });
+    } catch (err) {
+      fail(err);
+    }
+  };
+  const ask = box.querySelector('#exReview');
+  if (ask) ask.onclick = async () => {
+    try {
+      const r = await api('POST', P(`/exports/${id}/review-request`), { participant: box.querySelector('#exReviewer').value });
+      toast(ui`已派视觉初查：${r.tasks.map((t) => t.id).join(ui('、'))}`);
+      await showExport(id, { scroll: false });
+    } catch (err) {
+      fail(err);
+    }
+  };
   const rbtn = $('#exRender');
   if (rbtn) rbtn.onclick = async () => {
     rbtn.disabled = true;
@@ -823,6 +888,18 @@ async function showExport(id, { scroll = true } = {}) {
   };
   if (scroll) box.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
 }
+
+$('#reportManual').onsubmit = async (e) => {
+  e.preventDefault();
+  const n = (sel) => ($(sel).value === '' ? null : Number($(sel).value));
+  try {
+    await api('POST', P('/report/manual'), { revision_minutes: n('#rmMinutes'), errors_found: n('#rmErrors'), error_list: $('#rmList').value, note: $('#rmNote').value });
+    toast(ui('已保存'));
+    await VIEWS.report();
+  } catch (err) {
+    fail(err);
+  }
+};
 
 $('#newExport').onsubmit = async (e) => {
   e.preventDefault();
